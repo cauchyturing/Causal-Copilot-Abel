@@ -54,19 +54,22 @@ class TestPrompts:
         assert "diagnose" in prompt.lower()
 
 
-class TestExplainResultTool:
-    def test_basic(self):
-        from causal_copilot.mcp.server import explain_result
-        adj = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
-        names = ["X", "Y", "Z"]
-        result = json.loads(explain_result(adj, names))
+class TestInspectGraphToolBasic:
+    def test_dag(self):
+        from causal_copilot.mcp.server import inspect_graph
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0,0],[1,0,0],[0,1,0]]",
+            node_names='["X","Y","Z"]',
+        ))
         assert "graph_kind" in result
         assert result["graph_kind"] == "dag"
         assert "identifiability" in result
 
     def test_cpdag(self):
-        from causal_copilot.mcp.server import explain_result
-        adj = [[0, 2], [2, 0]]
-        names = ["A", "B"]
-        result = json.loads(explain_result(adj, names))
+        from causal_copilot.mcp.server import inspect_graph
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,2],[2,0]]",
+            node_names='["A","B"]',
+        ))
         assert result["graph_kind"] == "cpdag"
+        assert result["status"] == "needs_more_input"

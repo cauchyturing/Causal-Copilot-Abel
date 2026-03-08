@@ -34,28 +34,33 @@ Causal discovery finds cause-effect relationships from observational data — no
 4. Not checking for time-series structure
 """,
 
-    "analyze-dataset": """Guided causal discovery workflow:
+    "analyze-dataset": """Causal discovery workflow — use discover first, always.
 
-## Step 1: Diagnose Data
-Call diagnose_data with your CSV. Check linearity, data type, missingness, sample size, time-series.
+## Default Path (90% of cases)
+1. Call **discover** with your CSV and an optional causal question.
+   - It handles everything: data diagnosis, algorithm selection, hyperparameter tuning,
+     execution, and postprocessing.
+   - Read the summary, key_findings, and limitations in the response.
+   - Present results to the user with appropriate caveats based on graph_kind.
 
-## Step 2: Choose Strategy
-Based on diagnosis:
-- Linear + Gaussian: PC or GES
-- Linear + non-Gaussian: DirectLiNGAM
-- Nonlinear, small: PC with KCI
-- Nonlinear, large: NOTEARS or GRaSP
-- Discrete: PC with chisq or GES with BDeu
-- Time-series: PCMCI or VARLiNGAM
-- Missing: PC with mv_fisherz + MVPC
+2. If the user asks a follow-up causal question (e.g., "does X cause Y?"):
+   - Call **inspect_graph** with the run_id from discover, plus treatment and outcome.
+   - The query_assessment tells you if the effect is identifiable and by what method.
 
-## Step 3: Run Algorithm
-Use discover for full pipeline, or run_algorithm for manual control.
+3. If inspect_graph returns status="needs_more_input", follow its next_step instructions.
 
-## Step 4: Interpret Results
-Call explain_result. Check graph_kind, identifiable edges, root causes.
+## Expert Path (only when user explicitly requests)
+Use these tools only when the user names a specific algorithm or wants manual control:
+- **diagnose_data**: Get data statistics before choosing an algorithm.
+- **run_algorithm**: Run a specific algorithm with explicit hyperparameters.
+  - Set allow_resolver_overrides=false to use exact params without adjustments.
+  - Check provenance.resolver_adjustments for transparency on what was changed.
+- Then use **inspect_graph** with the run_id to analyze the resulting graph.
 
-## Step 5: Estimate Effects (optional)
-Call estimate_effects. Only valid for DAGs or CPDAG + linear-Gaussian (IDA).
+## What NOT to Do
+- Do NOT call diagnose_data → run_algorithm as the default path. Use discover.
+- Do NOT manually select algorithms unless the user explicitly asks.
+- Do NOT present CPDAG/PAG edges as definitive causal directions.
+- Do NOT claim effects are identifiable without checking inference_policy.
 """,
 }

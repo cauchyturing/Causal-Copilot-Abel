@@ -1,158 +1,10 @@
-"""Tests for the MCP server tools."""
+"""Tests for the MCP server tools (4-tool contract: discover, inspect_graph, diagnose_data, run_algorithm)."""
 
 import json
 from unittest.mock import patch
 
 import numpy as np
 import pytest
-
-from causal_copilot.mcp.server import analyze, explain_graph, list_algorithms
-
-
-class _MockAlgo:
-    def default_params(self):
-        return {"mock_param": True}
-
-    def fit(self, data, **kwargs):
-        n = data.shape[1]
-        return np.zeros((n, n)), {"mock": True}, None
-
-
-class _mock_algorithm:
-    def __enter__(self):
-        self._patcher = patch(
-            "causal_copilot.copilot._load_algorithm",
-            return_value=_MockAlgo(),
-        )
-        self._patcher.start()
-        return self
-
-    def __exit__(self, *args):
-        self._patcher.stop()
-
-
-class TestAnalyzeTool:
-    def test_basic_csv(self):
-        rng = np.random.default_rng(0)
-        lines = ["a,b,c"]
-        for _ in range(60):
-            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
-        csv = "\n".join(lines)
-        with _mock_algorithm():
-            result = json.loads(analyze(csv))
-        assert result["status"] in ("ok", "partial", "failed")
-        assert "provenance" in result
-
-    def test_bad_csv(self):
-        result = json.loads(analyze("not,valid\ncsv"))
-        # Should still parse (it's valid CSV, just small)
-        assert "status" in result
-
-    def test_empty_csv(self):
-        result = json.loads(analyze(""))
-        assert result["status"] == "error"
-
-    def test_single_column(self):
-        result = json.loads(analyze("a\n1\n2\n3"))
-        assert result["status"] == "error"
-        assert "2 columns" in result["error"]
-
-    def test_with_algorithm(self):
-        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
-        with _mock_algorithm():
-            result = json.loads(analyze(csv, algorithm="PC"))
-        assert result["status"] == "ok"
-
-    def test_returns_interpretation_hints(self):
-        # Create data where PC finds edges
-        rng = np.random.default_rng(42)
-        n = 100
-        x = rng.normal(size=n)
-        y = 0.8 * x + rng.normal(size=n) * 0.3
-        lines = ["x,y"] + [f"{x[i]},{y[i]}" for i in range(n)]
-        csv = "\n".join(lines)
-        with _mock_algorithm():
-            result = json.loads(analyze(csv))
-        assert result["status"] == "ok"
-
-
-class TestListAlgorithmsTool:
-    def test_available(self):
-        result = json.loads(list_algorithms("available"))
-        assert isinstance(result, list)
-        assert len(result) >= 5
-        for algo in result:
-            assert algo["available"] is True
-            assert "name" in algo
-            assert "family" in algo
-
-    def test_all(self):
-        result = json.loads(list_algorithms("all"))
-        assert len(result) >= 19
-
-    def test_filter_timeseries(self):
-        result = json.loads(list_algorithms("timeseries"))
-        for algo in result:
-            assert "timeseries" in algo["tags"]
-
-    def test_filter_constraint(self):
-        result = json.loads(list_algorithms("constraint"))
-        assert len(result) >= 2
-        # All should either have family=constraint or tag "constraint"
-        for algo in result:
-            assert algo["family"] == "constraint" or "constraint" in algo["tags"]
-
-    def test_unavailable_has_install_hint(self):
-        result = json.loads(list_algorithms("all"))
-        unavailable = [a for a in result if not a["available"]]
-        for algo in unavailable:
-            assert "install_hint" in algo
-
-    def test_has_best_for(self):
-        result = json.loads(list_algorithms("available"))
-        for algo in result:
-            assert "best_for" in algo
-
-
-class TestExplainGraphTool:
-    def test_simple_chain(self):
-        # X → Y → Z
-        adj = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
-        names = ["X", "Y", "Z"]
-        result = json.loads(explain_graph(adj, names))
-        assert "explanation" in result
-        assert "X → Y" in result["explanation"]
-        assert "Y → Z" in result["explanation"]
-        assert result["graph_stats"]["n_directed_edges"] == 2
-        assert "X" in result["graph_stats"]["root_causes"]
-        assert "Z" in result["graph_stats"]["terminal_effects"]
-        assert "Y" in result["graph_stats"]["mediators"]
-
-    def test_undirected_edges(self):
-        adj = [[0, 2], [2, 0]]
-        names = ["A", "B"]
-        result = json.loads(explain_graph(adj, names))
-        assert result["graph_stats"]["n_undirected_edges"] == 1
-
-    def test_empty_graph(self):
-        adj = [[0, 0], [0, 0]]
-        names = ["A", "B"]
-        result = json.loads(explain_graph(adj, names))
-        assert result["graph_stats"]["n_directed_edges"] == 0
-
-    def test_dimension_mismatch(self):
-        adj = [[0, 1], [0, 0]]
-        names = ["A", "B", "C"]
-        result = json.loads(explain_graph(adj, names))
-        assert "error" in result
-
-    def test_causal_chain_detected(self):
-        # A → B → C
-        adj = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
-        names = ["A", "B", "C"]
-        result = json.loads(explain_graph(adj, names))
-        assert "mediates" in result["explanation"]
-        assert "Causal chain" in result["explanation"]
 
 
 class _MockWrapper:
@@ -232,6 +84,196 @@ class _mock_run_algorithm:
         _restore_stat_module(self._had, self._old)
 
 
+# ── inspect_graph ──────────────────────────────────────────────────────
+
+
+class TestInspectGraphTool:
+    def test_dag_with_adj(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        # A->B: adj[1,0]=1
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+        ))
+        assert result["status"] == "ok"
+        assert result["graph_kind"] == "dag"
+        assert result["inference_policy"]["eligibility"] is True
+        assert result["inference_policy"]["method"] == "standard"
+        assert "summary" in result
+        assert "key_findings" in result
+
+    def test_cpdag_needs_more_input(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,2],[2,0]]",
+            node_names='["A","B"]',
+        ))
+        assert result["status"] == "needs_more_input"
+        assert "data_diagnosis" in result["missing_inputs"]
+        assert "next_step" in result
+
+    def test_cpdag_with_diagnosis_allows_ida(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,2],[2,0]]",
+            node_names='["A","B"]',
+            data_diagnosis='{"linearity": true, "gaussian_error": true}',
+        ))
+        assert result["status"] == "ok"
+        assert result["inference_policy"]["eligibility"] is True
+        assert result["inference_policy"]["method"] == "ida"
+
+    def test_cpdag_nonlinear_rejects(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,2],[2,0]]",
+            node_names='["A","B"]',
+            data_diagnosis='{"linearity": false, "gaussian_error": true}',
+        ))
+        assert result["status"] == "ok"
+        assert result["inference_policy"]["eligibility"] is False
+
+    def test_pag_rejects(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,3],[3,0]]",
+            node_names='["A","B"]',
+        ))
+        assert result["status"] == "ok"
+        assert result["graph_kind"] == "pag"
+        assert result["inference_policy"]["eligibility"] is False
+
+    def test_query_assessment(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        # A->B->C: adj[1,0]=1, adj[2,1]=1
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0,0],[1,0,0],[0,1,0]]",
+            node_names='["A","B","C"]',
+            treatment="A",
+            outcome="C",
+        ))
+        assert result["status"] == "ok"
+        qa = result["query_assessment"]
+        assert qa["directed_path_exists"] is True
+        assert qa["effect_identifiable"] is True
+        assert qa["directly_connected"] is False
+
+    def test_query_no_path(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        # B->A: adj[0,1]=1. Query A->B has no directed path.
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,1],[0,0]]",
+            node_names='["A","B"]',
+            treatment="A",
+            outcome="B",
+        ))
+        assert result["status"] == "ok"
+        qa = result["query_assessment"]
+        assert qa["directed_path_exists"] is False
+        assert qa["effect_identifiable"] is False
+
+    def test_run_id_mode(self):
+        from causal_copilot.mcp.artifacts import get_store
+        from causal_copilot.mcp.server import inspect_graph
+
+        rid = get_store().save({
+            "adjacency_matrix": [[0, 0], [1, 0]],
+            "node_names": ["X", "Y"],
+            "data_diagnosis": {"linearity": True, "gaussian_error": True},
+        })
+        result = json.loads(inspect_graph(run_id=rid))
+        assert result["status"] == "ok"
+        assert result["graph_kind"] == "dag"
+
+    def test_run_id_not_found(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(run_id="nonexistent"))
+        assert result["status"] == "error"
+        assert "not found" in result["error"]
+
+    def test_mutual_exclusion(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            run_id="abc",
+            adjacency_matrix="[[0]]",
+        ))
+        assert result["status"] == "error"
+        assert "mutually exclusive" in result["error"]
+
+    def test_no_input(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph())
+        assert result["status"] == "error"
+
+    def test_missing_node_names(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(adjacency_matrix="[[0,1],[0,0]]"))
+        assert result["status"] == "error"
+        assert "node_names" in result["error"]
+
+    def test_treatment_outcome_all_or_none(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+            treatment="A",
+        ))
+        assert result["status"] == "error"
+        assert "both" in result["error"].lower()
+
+    def test_treatment_equals_outcome(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+            treatment="A",
+            outcome="A",
+        ))
+        assert result["status"] == "error"
+        assert "different" in result["error"].lower()
+
+    def test_treatment_not_in_names(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+            treatment="Z",
+            outcome="B",
+        ))
+        assert result["status"] == "error"
+        assert "Z" in result["error"]
+
+    def test_graph_stats(self):
+        from causal_copilot.mcp.server import inspect_graph
+
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+        ))
+        gs = result["graph_stats"]
+        assert gs["n_nodes"] == 2
+        assert gs["n_edges"] == 1
+        assert gs["n_directed"] == 1
+        assert gs["density"] == 1.0
+
+
+# ── diagnose_data ──────────────────────────────────────────────────────
+
+
 class TestDiagnoseDataTool:
     def test_basic_diagnosis(self):
         from causal_copilot.mcp.server import diagnose_data
@@ -255,6 +297,9 @@ class TestDiagnoseDataTool:
         assert result["status"] == "error"
 
 
+# ── run_algorithm ──────────────────────────────────────────────────────
+
+
 class TestRunAlgorithmTool:
     def test_run_with_mock(self):
         from causal_copilot.mcp.server import run_algorithm
@@ -270,6 +315,48 @@ class TestRunAlgorithmTool:
         assert "adjacency_matrix" in result
         assert "run_id" in result
 
+    def test_hp_transparency(self):
+        from causal_copilot.mcp.server import run_algorithm
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_run_algorithm():
+            result = json.loads(run_algorithm(
+                csv,
+                algorithm="PC",
+                hyperparameters='{"alpha": 0.01}',
+            ))
+        assert result["status"] == "ok"
+        prov = result["provenance"]
+        assert "requested_hyperparameters" in prov
+        assert "effective_hyperparameters" in prov
+        assert "resolver_adjustments" in prov
+        assert prov["requested_hyperparameters"]["alpha"] == 0.01
+
+    def test_no_resolver_overrides(self):
+        from causal_copilot.mcp.server import run_algorithm
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_run_algorithm():
+            result = json.loads(run_algorithm(
+                csv,
+                algorithm="PC",
+                hyperparameters='{"alpha": 0.01, "indep_test": "kci"}',
+                allow_resolver_overrides=False,
+            ))
+        assert result["status"] == "ok"
+        prov = result["provenance"]
+        # With overrides disabled, effective should match requested
+        assert prov["effective_hyperparameters"]["indep_test"] == "kci"
+        assert prov["resolver_adjustments"] == {}
+
     def test_missing_algorithm(self):
         from causal_copilot.mcp.server import run_algorithm
 
@@ -277,133 +364,7 @@ class TestRunAlgorithmTool:
         assert result["status"] == "error"
 
 
-class TestMCPCLI:
-    def test_mcp_help(self, capsys):
-        from causal_copilot.cli import main
-
-        with pytest.raises(SystemExit):
-            main(["mcp", "--help"])
-
-
-class TestRefineGraphTool:
-    def test_refine_simple_graph(self):
-        from causal_copilot.mcp.server import refine_graph
-
-        adj = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
-        names = ["X", "Y", "Z"]
-        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
-        assert result["status"] == "ok"
-        assert "graph_kind" in result
-        assert result["graph_kind"] == "dag"
-        assert "edge_confidence" in result
-        assert result["n_directed"] == 2
-
-    def test_dimension_mismatch(self):
-        from causal_copilot.mcp.server import refine_graph
-
-        adj = [[0, 1], [0, 0]]
-        names = ["A", "B", "C"]
-        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
-        assert result["status"] == "error"
-
-    def test_invalid_json(self):
-        from causal_copilot.mcp.server import refine_graph
-
-        result = json.loads(refine_graph("not-json", '["A"]'))
-        assert result["status"] == "error"
-
-    def test_cpdag_detected(self):
-        from causal_copilot.mcp.server import refine_graph
-
-        # Undirected edge -> CPDAG
-        adj = [[0, 2], [2, 0]]
-        names = ["A", "B"]
-        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
-        assert result["status"] == "ok"
-        assert result["graph_kind"] == "cpdag"
-
-    def test_run_id_passthrough(self):
-        from causal_copilot.mcp.server import refine_graph
-
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        result = json.loads(refine_graph(
-            json.dumps(adj), json.dumps(names), run_id="test-123",
-        ))
-        assert result["run_id"] == "test-123"
-
-
-class TestEstimateEffectsTool:
-    def test_dag_allows_inference(self):
-        from causal_copilot.mcp.server import estimate_effects
-
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(100))
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-            treatment="X", outcome="Y",
-        ))
-        assert result["status"] == "partial"
-        assert result["inference_method"] == "standard"
-        assert result["graph_kind"] == "dag"
-        assert result["effect_estimate"] is None
-
-    def test_pag_rejects_inference(self):
-        from causal_copilot.mcp.server import estimate_effects
-
-        adj = [[0, 4], [5, 0]]
-        names = ["A", "B"]
-        csv = "a,b\n" + "\n".join(f"{i},{i*2}" for i in range(50))
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-            treatment="A", outcome="B",
-        ))
-        assert result["status"] == "error"
-        assert "PAG" in result["error"]
-
-    def test_missing_treatment(self):
-        from causal_copilot.mcp.server import estimate_effects
-
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        csv = "x,y\n1,2\n3,4"
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-        ))
-        assert result["status"] == "error"
-
-    def test_treatment_not_in_names(self):
-        from causal_copilot.mcp.server import estimate_effects
-
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        csv = "x,y\n1,2\n3,4"
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-            treatment="Z", outcome="Y",
-        ))
-        assert result["status"] == "error"
-        assert "Z" in result["error"]
-
-    def test_cpdag_linear_gaussian_allows_ida(self):
-        from causal_copilot.mcp.server import estimate_effects
-        from causal_discovery.pdag_policy import check_inference_policy
-
-        # Test PDAG policy directly: CPDAG + linear-Gaussian -> IDA allowed
-        adj = np.array([[0, 2], [2, 0]])
-        policy = check_inference_policy(adj, is_linear_gaussian=True)
-        assert policy["allow_inference"] is True
-        assert policy["method"] == "ida"
-
-    def test_cpdag_nonlinear_rejects(self):
-        from causal_copilot.mcp.server import estimate_effects
-        from causal_discovery.pdag_policy import check_inference_policy
-
-        # Test PDAG policy directly: CPDAG + non-linear -> reject
-        adj = np.array([[0, 2], [2, 0]])
-        policy = check_inference_policy(adj, is_linear_gaussian=False)
-        assert policy["allow_inference"] is False
+# ── discover ───────────────────────────────────────────────────────────
 
 
 class TestDiscoverTool:
@@ -422,6 +383,11 @@ class TestDiscoverTool:
             assert "graph_kind" in result
             assert "provenance" in result
             assert "run_id" in result
+            # Enriched output fields
+            assert "summary" in result
+            assert "key_findings" in result
+            assert "limitations" in result
+            assert "algorithm_rationale" in result
 
     def test_empty_csv(self):
         from causal_copilot.mcp.server import discover
@@ -443,3 +409,14 @@ class TestDiscoverTool:
         with _mock_run_algorithm():
             result = json.loads(discover(csv, algorithm="PC"))
         assert result["status"] in ("ok", "partial", "error")
+
+
+# ── MCP CLI ────────────────────────────────────────────────────────────
+
+
+class TestMCPCLI:
+    def test_mcp_help(self, capsys):
+        from causal_copilot.cli import main
+
+        with pytest.raises(SystemExit):
+            main(["mcp", "--help"])

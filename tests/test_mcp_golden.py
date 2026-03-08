@@ -1,4 +1,4 @@
-"""Golden tests: verify tool output schemas remain stable.
+"""Golden tests: verify tool output schemas remain stable (4-tool contract).
 
 If these fail, it means a tool's output contract changed.
 Update the golden snapshot ONLY after verifying the change is intentional.
@@ -6,7 +6,7 @@ Update the golden snapshot ONLY after verifying the change is intentional.
 import json
 import sys
 from types import ModuleType
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -53,71 +53,81 @@ class TestOutputSchemaStability:
                 "linearity", "data_type", "sample_size", "feature_number",
             ])
 
-    def test_explain_graph_schema(self):
-        from causal_copilot.mcp.server import explain_graph
+    def test_inspect_graph_ok_schema(self):
+        from causal_copilot.mcp.server import inspect_graph
 
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        result = json.loads(explain_graph(adj, names))
-        _check_keys(result, ["explanation", "graph_stats"])
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["X","Y"]',
+        ))
+        _check_keys(result, [
+            "status", "graph_kind", "graph_stats", "identifiability",
+            "inference_policy", "summary", "key_findings", "limitations",
+        ])
         _check_keys(result["graph_stats"], [
-            "n_directed_edges", "n_undirected_edges",
-            "root_causes", "terminal_effects",
+            "n_nodes", "n_edges", "n_directed", "n_undirected",
+            "n_bidirected", "density",
+        ])
+        _check_keys(result["inference_policy"], [
+            "eligibility", "method", "reason", "assumptions_used",
         ])
 
-    def test_explain_result_schema(self):
-        from causal_copilot.mcp.server import explain_result
+    def test_inspect_graph_needs_more_input_schema(self):
+        from causal_copilot.mcp.server import inspect_graph
 
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        result = json.loads(explain_result(adj, names))
-        _check_keys(result, ["explanation", "graph_stats", "graph_kind", "identifiability"])
-
-    def test_estimate_effects_rejection_schema(self):
-        from causal_copilot.mcp.server import estimate_effects
-
-        # PAG → should reject
-        adj = [[0, 4], [5, 0]]
-        names = ["A", "B"]
-        csv = "a,b\n" + "\n".join(f"{i},{i*2}" for i in range(50))
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-            treatment="A", outcome="B",
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,2],[2,0]]",
+            node_names='["A","B"]',
         ))
-        _check_keys(result, ["status", "error", "graph_kind"])
+        _check_keys(result, [
+            "status", "graph_kind", "graph_stats",
+            "missing_inputs", "next_step",
+        ])
+        assert result["status"] == "needs_more_input"
 
-    def test_refine_graph_schema(self):
-        from causal_copilot.mcp.server import refine_graph
+    def test_inspect_graph_query_assessment_schema(self):
+        from causal_copilot.mcp.server import inspect_graph
 
-        adj = [[0, 0], [1, 0]]
-        names = ["X", "Y"]
-        result = json.loads(refine_graph(
-            json.dumps(adj), json.dumps(names),
+        result = json.loads(inspect_graph(
+            adjacency_matrix="[[0,0],[1,0]]",
+            node_names='["A","B"]',
+            treatment="A",
+            outcome="B",
         ))
-        _check_keys(result, ["status", "adjacency_matrix", "edges", "graph_kind"])
+        assert "query_assessment" in result
+        _check_keys(result["query_assessment"], [
+            "treatment", "outcome", "directly_connected",
+            "directed_path_exists", "effect_identifiable", "method",
+        ])
 
-    def test_list_algorithms_schema(self):
-        from causal_copilot.mcp.server import list_algorithms
+    def test_run_algorithm_schema(self):
+        _ensure_stat_module()
+        from causal_copilot.mcp.server import run_algorithm
 
-        result = json.loads(list_algorithms())
-        # Result is a list of algorithm dicts
-        assert isinstance(result, list)
-        assert len(result) > 0
-        _check_keys(result[0], ["name", "family", "available"])
+        class _MockWrapper:
+            def __init__(self, args=None):
+                pass
 
-    def test_analyze_schema(self):
-        from causal_copilot.mcp.server import analyze
+            def fit(self, data, **kwargs):
+                n = data.shape[1]
+                return np.zeros((n, n)), {}, None
 
-        # Use non-degenerate data (add noise to avoid singular matrix)
         rng = np.random.default_rng(0)
-        csv = "x,y\n" + "\n".join(
+        csv = "a,b\n" + "\n".join(
             f"{rng.normal()},{rng.normal()}" for _ in range(60)
         )
-        result = json.loads(analyze(csv))
-        _check_keys(result, ["summary"])
-        # edges present on success, not on failure
-        if result.get("status") != "failed":
-            _check_keys(result, ["edges"])
+        with patch("causal_discovery.wrappers.PC", _MockWrapper):
+            result = json.loads(run_algorithm(csv, algorithm="PC"))
+        if result["status"] == "ok":
+            _check_keys(result, [
+                "status", "adjacency_matrix", "edges", "graph_kind",
+                "identifiability", "run_id", "provenance",
+            ])
+            _check_keys(result["provenance"], [
+                "algorithm", "requested_hyperparameters",
+                "effective_hyperparameters", "resolver_adjustments",
+                "seed", "planner",
+            ])
 
 
 class TestResourceSchemaStability:

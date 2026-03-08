@@ -18,12 +18,11 @@ import numpy as np
 import pandas as pd
 from fastmcp import FastMCP
 
-from causal_copilot import CausalCopilot, __version__
-from causal_copilot.algorithms.registry import REGISTRY, available_algorithms
 from causal_copilot.mcp.artifacts import get_store
 from causal_copilot.mcp.bridge import (
     PIPELINE_ROOT,
     adj_to_edges,
+    generate_discovery_summary,
     make_args,
     make_global_state,
     serialize_result,
@@ -37,9 +36,10 @@ from causal_discovery.pdag_policy import (
 mcp = FastMCP(
     "Causal-Copilot",
     instructions=(
-        "Causal discovery expert. Use the `analyze` tool to discover causal "
-        "relationships in tabular data. Use `list_algorithms` to see available "
-        "methods and their strengths. Use `explain_graph` to interpret results."
+        "Causal discovery expert. Use `discover` for autonomous causal analysis "
+        "(handles algorithm selection, tuning, and execution). Use `inspect_graph` "
+        "to analyze results and check inference eligibility. Use `diagnose_data` "
+        "and `run_algorithm` only for expert-level manual control."
     ),
 )
 
@@ -78,340 +78,20 @@ def _pipeline_cwd():
             os.chdir(prev)
 
 
-def _adj_to_edges(adj: np.ndarray, columns: list[str]) -> list[dict[str, str]]:
-    """Convert adjacency matrix to a list of edge dicts for LLM consumption."""
-    edges = []
+def _has_directed_path(adj: np.ndarray, src_idx: int, tgt_idx: int) -> bool:
+    """BFS for directed path from src to tgt. adj[i,j]=1 means j→i."""
     n = adj.shape[0]
-    seen = set()
-    for i in range(n):
-        for j in range(n):
-            if adj[i, j] == 0:
-                continue
-            key = (min(i, j), max(i, j))
-            if adj[i, j] == 1:
-                # j → i (directed)
-                edges.append({
-                    "from": columns[j],
-                    "to": columns[i],
-                    "type": "directed",
-                })
-            elif adj[i, j] == 2 and key not in seen:
-                edges.append({
-                    "from": columns[i],
-                    "to": columns[j],
-                    "type": "undirected",
-                })
-                seen.add(key)
-            elif adj[i, j] == 3 and key not in seen:
-                edges.append({
-                    "from": columns[i],
-                    "to": columns[j],
-                    "type": "bidirected",
-                })
-                seen.add(key)
-    return edges
-
-
-def _format_result(result) -> dict[str, Any]:
-    """Format CausalResult into an LLM-friendly dict."""
-    output: dict[str, Any] = {
-        "status": result.status,
-        "summary": result.summary,
-    }
-
-    if result.adjacency_matrix is not None:
-        columns = result.node_names or [f"V{i}" for i in range(result.adjacency_matrix.shape[0])]
-        output["edges"] = _adj_to_edges(result.adjacency_matrix, columns)
-        output["node_names"] = columns
-        output["n_edges"] = len(output["edges"])
-        output["adjacency_matrix"] = result.adjacency_matrix.tolist()
-
-    if result.assumptions:
-        output["assumptions"] = result.assumptions
-
-    if result.warnings:
-        output["warnings"] = result.warnings
-
-    if result.provenance:
-        p = result.provenance
-        output["provenance"] = {
-            "algorithm": p.algorithm,
-            "planner": p.planner,
-            "seed": p.seed,
-            "runtime_seconds": round(p.runtime_seconds, 2),
-        }
-
-    return output
-
-
-@mcp.tool()
-def analyze(
-    csv_data: str,
-    query: str = "",
-    algorithm: str | None = None,
-    seed: int = 42,
-    timeout: int = 300,
-) -> str:
-    """Run causal discovery on tabular CSV data.
-
-    Discovers causal relationships (X causes Y) from observational data.
-    Returns the causal graph as directed edges, a natural language summary,
-    and full provenance for reproducibility.
-
-    Args:
-        csv_data: CSV-formatted data as a string (with header row).
-        query: Optional causal question to guide analysis (e.g. "What causes churn?").
-        algorithm: Force a specific algorithm (e.g. "PC", "GES", "FCI").
-                   If omitted, the best algorithm is selected automatically.
-        seed: Random seed for reproducibility (default: 42).
-        timeout: Maximum seconds for the algorithm to run (default: 300).
-
-    Returns:
-        JSON with edges, summary, assumptions, and provenance.
-    """
-    try:
-        df = pd.read_csv(io.StringIO(csv_data))
-    except Exception as e:
-        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
-
-    if df.empty or df.shape[1] < 2:
-        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
-
-    copilot = CausalCopilot()
-
-    try:
-        result = copilot.analyze(
-            df,
-            algorithm=algorithm,
-            seed=seed,
-            timeout=timeout,
-        )
-    except Exception as e:
-        return json.dumps({"status": "error", "error": f"Analysis failed: {e}"})
-
-    output = _format_result(result)
-
-    # Add interpretation hints for the LLM
-    if output.get("edges"):
-        directed = [e for e in output["edges"] if e["type"] == "directed"]
-        undirected = [e for e in output["edges"] if e["type"] == "undirected"]
-        hints = []
-        if directed:
-            hints.append(
-                f"{len(directed)} directed edge(s) found — these represent "
-                f"likely causal relationships."
-            )
-        if undirected:
-            hints.append(
-                f"{len(undirected)} undirected edge(s) — causal direction "
-                f"could not be determined."
-            )
-        output["interpretation_hints"] = hints
-
-    return json.dumps(output, indent=2)
-
-
-@mcp.tool()
-def list_algorithms(
-    filter: str = "available",
-) -> str:
-    """List causal discovery algorithms with their capabilities.
-
-    Args:
-        filter: Which algorithms to show.
-            - "available": Only algorithms whose dependencies are installed (default).
-            - "all": All 19 registered algorithms.
-            - "timeseries": Time-series capable algorithms.
-            - "constraint": Constraint-based algorithms (PC, FCI, etc.).
-            - "score": Score-based algorithms (GES, GRaSP, etc.).
-            - "functional": Functional model algorithms (LiNGAM variants).
-            - "latent": Algorithms that handle latent confounders (FCI).
-
-    Returns:
-        JSON list of algorithms with name, family, tags, and availability.
-    """
-    if filter == "available":
-        algos = available_algorithms()
-    elif filter == "all":
-        algos = REGISTRY
-    else:
-        # Filter by family or tag
-        algos = {}
-        for name, spec in REGISTRY.items():
-            if filter == spec.family:
-                algos[name] = spec
-            elif filter in spec.tags:
-                algos[name] = spec
-
-    avail_set = set(available_algorithms().keys())
-
-    result = []
-    for name, spec in sorted(algos.items()):
-        entry = {
-            "name": name,
-            "family": spec.family,
-            "tags": list(spec.tags),
-            "available": name in avail_set,
-            "upstream_packages": spec.upstream_packages,
-        }
-        # Add human-readable guidance
-        if "timeseries" in spec.tags:
-            entry["best_for"] = "Time-series / temporal data"
-        elif "non-gaussian" in spec.tags:
-            entry["best_for"] = "Non-Gaussian continuous data (can identify unique DAG)"
-        elif "latent-confounders" in spec.tags:
-            entry["best_for"] = "Data with possible unmeasured confounders"
-        elif "nonlinear" in spec.tags:
-            entry["best_for"] = "Nonlinear relationships"
-        elif spec.family == "constraint":
-            entry["best_for"] = "General-purpose, works well with Gaussian data"
-        elif spec.family == "score":
-            entry["best_for"] = "General-purpose, score-based search"
-        else:
-            entry["best_for"] = "Specialized use case"
-
-        if not entry["available"]:
-            entry["install_hint"] = f"pip install {' '.join(spec.upstream_packages)}"
-
-        result.append(entry)
-
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool()
-def explain_graph(
-    adjacency_matrix: list[list[int]],
-    node_names: list[str],
-) -> str:
-    """Explain a causal graph in natural language.
-
-    Converts an adjacency matrix into a human-readable description of
-    causal relationships, including direct causes, effects, and potential
-    confounders.
-
-    Args:
-        adjacency_matrix: Square matrix where mat[i][j]=1 means j causes i.
-        node_names: Names for each node (must match matrix dimensions).
-
-    Returns:
-        Natural language explanation of the causal structure.
-    """
-    adj = np.array(adjacency_matrix)
-    n = adj.shape[0]
-
-    if adj.shape[0] != adj.shape[1]:
-        return json.dumps({"error": "Adjacency matrix must be square."})
-    if len(node_names) != n:
-        return json.dumps({"error": f"Expected {n} node names, got {len(node_names)}."})
-
-    edges = _adj_to_edges(adj, node_names)
-
-    # Build per-node analysis
-    causes_of: dict[str, list[str]] = {name: [] for name in node_names}
-    effects_of: dict[str, list[str]] = {name: [] for name in node_names}
-    undirected_neighbors: dict[str, list[str]] = {name: [] for name in node_names}
-
-    for e in edges:
-        if e["type"] == "directed":
-            causes_of[e["to"]].append(e["from"])
-            effects_of[e["from"]].append(e["to"])
-        elif e["type"] == "undirected":
-            undirected_neighbors[e["from"]].append(e["to"])
-            undirected_neighbors[e["to"]].append(e["from"])
-
-    # Find roots (no causes) and leaves (no effects)
-    roots = [name for name in node_names if not causes_of[name] and effects_of[name]]
-    leaves = [name for name in node_names if causes_of[name] and not effects_of[name]]
-    mediators = [
-        name for name in node_names
-        if causes_of[name] and effects_of[name]
-    ]
-
-    # Build explanation
-    lines = []
-    directed = [e for e in edges if e["type"] == "directed"]
-    undirected = [e for e in edges if e["type"] == "undirected"]
-    bidirected = [e for e in edges if e["type"] == "bidirected"]
-
-    lines.append(f"Causal graph: {n} variables, {len(edges)} edges.")
-    lines.append("")
-
-    if directed:
-        lines.append("Causal relationships:")
-        for e in directed:
-            lines.append(f"  {e['from']} → {e['to']}")
-
-    if undirected:
-        lines.append("")
-        lines.append("Associated but direction unknown:")
-        for e in undirected:
-            lines.append(f"  {e['from']} — {e['to']}")
-
-    if bidirected:
-        lines.append("")
-        lines.append("Bidirected (possible hidden common cause):")
-        for e in bidirected:
-            lines.append(f"  {e['from']} ↔ {e['to']}")
-
-    lines.append("")
-    if roots:
-        lines.append(f"Root causes (no parents): {', '.join(roots)}")
-    if leaves:
-        lines.append(f"Terminal effects (no children): {', '.join(leaves)}")
-    if mediators:
-        lines.append(f"Mediators (both cause and effect): {', '.join(mediators)}")
-
-    # Identify chains
-    for name in mediators:
-        for cause in causes_of[name]:
-            for effect in effects_of[name]:
-                lines.append(
-                    f"  Causal chain: {cause} → {name} → {effect} "
-                    f"({name} mediates the effect of {cause} on {effect})"
-                )
-
-    explanation = {
-        "explanation": "\n".join(lines),
-        "graph_stats": {
-            "n_nodes": n,
-            "n_directed_edges": len(directed),
-            "n_undirected_edges": len(undirected),
-            "n_bidirected_edges": len(bidirected),
-            "root_causes": roots,
-            "terminal_effects": leaves,
-            "mediators": mediators,
-        },
-    }
-    return json.dumps(explanation, indent=2)
-
-
-@mcp.tool()
-def explain_result(
-    adjacency_matrix: list[list[int]],
-    node_names: list[str],
-    run_id: str = "",
-) -> str:
-    """Explain a causal graph in natural language with identifiability info.
-
-    Enhanced version of explain_graph with graph_kind and identifiability.
-
-    Args:
-        adjacency_matrix: 2D array (mat[i,j]=1 means j->i)
-        node_names: Variable names
-        run_id: Optional run_id from previous call
-
-    Returns:
-        JSON with explanation, graph_stats, graph_kind, identifiability
-    """
-    base_result = json.loads(explain_graph(adjacency_matrix, node_names))
-    if "error" in base_result:
-        return json.dumps(base_result)
-
-    adj = np.array(adjacency_matrix)
-    base_result["graph_kind"] = classify_graph_kind(adj)
-    base_result["identifiability"] = get_identifiable_edges(adj, node_names)
-
-    return json.dumps(base_result)
+    visited = {src_idx}
+    queue = [src_idx]
+    while queue:
+        current = queue.pop(0)
+        if current == tgt_idx:
+            return True
+        for i in range(n):
+            if adj[i, current] == 1 and i not in visited:
+                visited.add(i)
+                queue.append(i)
+    return False
 
 
 @mcp.tool()
@@ -474,6 +154,7 @@ def run_algorithm(
     algorithm: str,
     hyperparameters: str = "{}",
     seed: int = 42,
+    allow_resolver_overrides: bool = True,
 ) -> str:
     """Run a specific causal discovery algorithm with given hyperparameters.
 
@@ -484,9 +165,14 @@ def run_algorithm(
         algorithm: Algorithm name (e.g., "PC", "GES", "DirectLiNGAM")
         hyperparameters: JSON string of algorithm hyperparameters
         seed: Random seed
+        allow_resolver_overrides: If true (default), resolvers may override CI test
+            and score function based on data characteristics. Set to false to use
+            your exact hyperparameters without any automatic adjustments.
 
     Returns:
         JSON with adjacency_matrix, edges, graph_kind, run_id, provenance
+        (including requested_hyperparameters, effective_hyperparameters,
+        resolver_adjustments for full transparency).
     """
     if not algorithm or not algorithm.strip():
         return json.dumps({"status": "error", "error": "algorithm must not be empty."})
@@ -516,23 +202,46 @@ def run_algorithm(
         with _pipeline_cwd():
             gs = stat_info_collection(gs)
 
-            # Apply user hyperparameters
+            # Start from user's exact hyperparameters
+            requested_hp = dict(hp)
             algo_args = dict(hp)
+            resolver_adjustments = {}
 
-            # Resolver overrides: correct CI test / score func for the data
-            ci_test_algos = {
-                "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
-                "BAMB", "HITONMB", "IAMBnPC", "MBOR",
-            }
-            if algorithm in ci_test_algos:
-                algo_args["indep_test"] = resolve_ci_test(gs.statistics)
+            if allow_resolver_overrides:
+                # Resolver overrides: correct CI test / score func for the data
+                ci_test_algos = {
+                    "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
+                    "BAMB", "HITONMB", "IAMBnPC", "MBOR",
+                }
+                if algorithm in ci_test_algos:
+                    resolved = resolve_ci_test(gs.statistics)
+                    if resolved != algo_args.get("indep_test"):
+                        resolver_adjustments["indep_test"] = {
+                            "requested": algo_args.get("indep_test"),
+                            "effective": resolved,
+                            "reason": "data-adaptive CI test selection",
+                        }
+                    algo_args["indep_test"] = resolved
 
-            score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
-            if algorithm in score_algos:
-                algo_args["score_func"] = resolve_score_func(gs.statistics, algorithm)
+                score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
+                if algorithm in score_algos:
+                    resolved = resolve_score_func(gs.statistics, algorithm)
+                    if resolved != algo_args.get("score_func"):
+                        resolver_adjustments["score_func"] = {
+                            "requested": algo_args.get("score_func"),
+                            "effective": resolved,
+                            "reason": "data-adaptive score function selection",
+                        }
+                    algo_args["score_func"] = resolved
 
-            if algorithm == "PC" and gs.statistics.missingness:
-                algo_args["mvpc"] = True
+                if algorithm == "PC" and gs.statistics.missingness:
+                    if not algo_args.get("mvpc"):
+                        resolver_adjustments["mvpc"] = {
+                            "requested": algo_args.get("mvpc"),
+                            "effective": True,
+                            "reason": "missing data detected",
+                        }
+                    algo_args["mvpc"] = True
 
             gs.algorithm.algorithm_arguments = algo_args
 
@@ -541,7 +250,9 @@ def run_algorithm(
         node_names = gs.user_data.selected_features
         provenance = {
             "algorithm": algorithm,
-            "hyperparameters": algo_args,
+            "requested_hyperparameters": requested_hp,
+            "effective_hyperparameters": algo_args,
+            "resolver_adjustments": resolver_adjustments,
             "seed": seed,
             "planner": "user-specified",
         }
@@ -554,210 +265,6 @@ def run_algorithm(
         return json.dumps(result, indent=2, cls=_NumpyEncoder)
     except Exception as e:
         return json.dumps({"status": "error", "error": f"Algorithm execution failed: {e}"})
-
-
-@mcp.tool()
-def refine_graph(
-    adjacency_matrix: str,
-    node_names: str,
-    csv_data: str = "",
-    n_bootstrap: int = 20,
-    run_id: str = "",
-) -> str:
-    """Refine a causal graph using bootstrap resampling and statistical tests.
-
-    Takes a raw graph from run_algorithm and refines it with edge confidence.
-
-    Args:
-        adjacency_matrix: JSON 2D array (mat[i,j]=1 means j->i)
-        node_names: JSON array of variable names
-        csv_data: CSV string (needed for bootstrap)
-        n_bootstrap: Number of bootstrap iterations (default 20)
-        run_id: Optional run_id from previous call
-
-    Returns:
-        JSON with refined adjacency_matrix, edge_confidence, graph_kind
-    """
-    try:
-        adj_list = json.loads(adjacency_matrix)
-        names = json.loads(node_names)
-    except (json.JSONDecodeError, TypeError) as e:
-        return json.dumps({"status": "error", "error": f"Invalid JSON input: {e}"})
-
-    adj = np.array(adj_list)
-
-    # Validate: must be square
-    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
-        return json.dumps({"status": "error", "error": "Adjacency matrix must be square."})
-
-    # Validate: dimension matches names
-    if adj.shape[0] != len(names):
-        return json.dumps({
-            "status": "error",
-            "error": f"Matrix dimension {adj.shape[0]} != {len(names)} node names.",
-        })
-
-    graph_kind = classify_graph_kind(adj)
-    identifiability = get_identifiable_edges(adj, names)
-    edges = adj_to_edges(adj, names)
-
-    result: dict[str, Any] = {
-        "status": "ok",
-        "adjacency_matrix": adj.tolist(),
-        "edges": edges,
-        "node_names": names,
-        "graph_kind": graph_kind,
-        "identifiability": identifiability,
-        "n_directed": sum(1 for e in edges if e["type"] == "directed"),
-        "n_undirected": sum(1 for e in edges if e["type"] == "undirected"),
-        "n_bidirected": sum(1 for e in edges if e["type"] == "bidirected"),
-    }
-
-    # Bootstrap refinement not yet integrated — confidence is placeholder.
-    # Do NOT rely on these values for decision-making.
-    result["edge_confidence"] = {
-        f"{e['from']}->{e['to']}": None
-        for e in edges if e["type"] == "directed"
-    }
-    result["edge_confidence_note"] = (
-        "Placeholder — bootstrap refinement not yet integrated. "
-        "All values are null. Do not use for decision-making."
-    )
-
-    if run_id:
-        result["run_id"] = run_id
-
-    return json.dumps(result, indent=2)
-
-
-@mcp.tool()
-def estimate_effects(
-    adjacency_matrix: str,
-    node_names: str,
-    csv_data: str,
-    treatment: str = "",
-    outcome: str = "",
-    run_id: str = "",
-) -> str:
-    """Estimate causal effects from a discovered graph.
-
-    Uses PDAG policy to determine if inference is valid:
-    - DAG: full inference
-    - CPDAG + linear-Gaussian: IDA bounds
-    - CPDAG + nonlinear: rejects
-    - PAG: always rejects
-
-    Args:
-        adjacency_matrix: JSON 2D array
-        node_names: JSON array of variable names
-        csv_data: CSV string
-        treatment: Treatment variable name
-        outcome: Outcome variable name
-        run_id: Optional run_id
-
-    Returns:
-        JSON with effect estimates or rejection reason
-    """
-    try:
-        adj_list = json.loads(adjacency_matrix)
-        names = json.loads(node_names)
-    except (json.JSONDecodeError, TypeError) as e:
-        return json.dumps({"status": "error", "error": f"Invalid JSON input: {e}"})
-
-    adj = np.array(adj_list)
-
-    # Validate matrix
-    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
-        return json.dumps({"status": "error", "error": "Adjacency matrix must be square."})
-
-    if adj.shape[0] != len(names):
-        return json.dumps({
-            "status": "error",
-            "error": f"Matrix dimension {adj.shape[0]} != {len(names)} node names.",
-        })
-
-    # Validate treatment and outcome
-    if not treatment or not outcome:
-        return json.dumps({
-            "status": "error",
-            "error": "Both treatment and outcome must be specified.",
-        })
-
-    if treatment not in names:
-        return json.dumps({
-            "status": "error",
-            "error": f"Treatment '{treatment}' not in node_names: {names}",
-        })
-
-    if outcome not in names:
-        return json.dumps({
-            "status": "error",
-            "error": f"Outcome '{outcome}' not in node_names: {names}",
-        })
-
-    # Parse CSV to detect linearity
-    try:
-        df = pd.read_csv(io.StringIO(csv_data))
-    except Exception as e:
-        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
-
-    # Determine linear-Gaussian using actual diagnostics when possible
-    is_linear_gaussian = False
-    try:
-        with _pipeline_cwd():
-            from preprocess.stat_info_functions import stat_info_collection
-            gs = make_global_state(df)
-            gs = stat_info_collection(gs)
-            is_linear_gaussian = (
-                getattr(gs.statistics, "linearity", False)
-                and getattr(gs.statistics, "gaussian_error", False)
-            )
-    except Exception:
-        # Fallback: conservative — treat as non-linear-Gaussian
-        is_linear_gaussian = False
-
-    policy = check_inference_policy(adj, is_linear_gaussian=is_linear_gaussian)
-
-    if not policy["allow_inference"]:
-        suggestion = "Orient ambiguous edges or use a DAG-producing algorithm."
-        if policy["graph_kind"] == "pag":
-            suggestion = (
-                "Use a constraint-based algorithm without latent confounders "
-                "(e.g., PC instead of FCI) or provide domain knowledge."
-            )
-        return json.dumps({
-            "status": "error",
-            "error": f"{policy['graph_kind'].upper()} graph: {policy['reason']}",
-            "graph_kind": policy["graph_kind"],
-            "suggestion": suggestion,
-        })
-
-    # Policy allows inference
-    identifiability = get_identifiable_edges(adj, names)
-
-    result: dict[str, Any] = {
-        "status": "partial",
-        "treatment": treatment,
-        "outcome": outcome,
-        "graph_kind": policy["graph_kind"],
-        "inference_method": policy["method"],
-        "policy_reason": policy["reason"],
-        "identifiability": identifiability,
-        "effect_estimate": None,
-    }
-
-    # Effect estimation pipeline (DML, IDA, etc.) not yet integrated.
-    # Status is "partial" — policy check passed, but no numeric estimate.
-    result["note"] = (
-        f"PDAG policy allows inference via '{policy['method']}'. "
-        "Numeric effect estimation not yet integrated — "
-        "effect_estimate is null. Coming in v0.3.1."
-    )
-
-    if run_id:
-        result["run_id"] = run_id
-
-    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
@@ -904,6 +411,9 @@ def discover(
         }
         result = serialize_result(gs, node_names=node_names, provenance=provenance)
 
+        # Enrich with human-ready summary (deterministic, no LLM call)
+        result.update(generate_discovery_summary(result))
+
         if warnings:
             result["warnings"] = warnings
 
@@ -920,6 +430,262 @@ def discover(
         if warnings:
             payload["warnings"] = warnings
         return json.dumps(payload)
+
+
+@mcp.tool()
+def inspect_graph(
+    run_id: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    data_diagnosis: str = "",
+    treatment: str = "",
+    outcome: str = "",
+) -> str:
+    """Analyze a causal graph: classification, inference policy, query assessment.
+
+    Two input modes (mutually exclusive):
+    1. run_id from discover/run_algorithm (preferred — includes cached diagnosis)
+    2. adjacency_matrix + node_names (+ optional data_diagnosis for CPDAG inference)
+
+    Optional: treatment + outcome triggers query_assessment for a specific causal query.
+
+    Args:
+        run_id: Run ID from a previous discover or run_algorithm call.
+        adjacency_matrix: JSON 2D array (mat[i][j]=1 means j causes i). Use with node_names.
+        node_names: JSON array of variable names. Required with adjacency_matrix.
+        data_diagnosis: JSON with linearity/gaussian_error fields. Needed for CPDAG
+                        inference policy when not using run_id.
+        treatment: Treatment variable name (triggers query_assessment).
+        outcome: Outcome variable name (triggers query_assessment).
+
+    Returns:
+        JSON with graph_kind, graph_stats, identifiability, inference_policy,
+        query_assessment (if treatment/outcome), summary, key_findings, limitations.
+    """
+    # --- Resolve inputs ---
+    adj = None
+    names = None
+    diagnosis = None
+
+    if run_id and adjacency_matrix:
+        return json.dumps({
+            "status": "error",
+            "error": "run_id and adjacency_matrix are mutually exclusive.",
+        })
+
+    if run_id:
+        cached = get_store().get(run_id)
+        if cached is None:
+            return json.dumps({
+                "status": "error",
+                "error": f"run_id '{run_id}' not found or expired.",
+            })
+        adj = np.array(cached["adjacency_matrix"])
+        names = cached["node_names"]
+        diagnosis = cached.get("data_diagnosis")
+    elif adjacency_matrix:
+        if not node_names:
+            return json.dumps({
+                "status": "error",
+                "error": "node_names required when using adjacency_matrix.",
+            })
+        try:
+            adj_list = json.loads(adjacency_matrix)
+            names = json.loads(node_names)
+        except (json.JSONDecodeError, TypeError) as e:
+            return json.dumps({"status": "error", "error": f"Invalid JSON: {e}"})
+        adj = np.array(adj_list)
+        if data_diagnosis:
+            try:
+                diagnosis = json.loads(data_diagnosis)
+            except json.JSONDecodeError as e:
+                return json.dumps({
+                    "status": "error",
+                    "error": f"Invalid data_diagnosis JSON: {e}",
+                })
+    else:
+        return json.dumps({
+            "status": "error",
+            "error": "Provide either run_id or adjacency_matrix + node_names.",
+        })
+
+    # --- Validate ---
+    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
+        return json.dumps({"status": "error", "error": "Adjacency matrix must be square."})
+    if adj.shape[0] != len(names):
+        return json.dumps({
+            "status": "error",
+            "error": f"Matrix dimension {adj.shape[0]} != {len(names)} node names.",
+        })
+
+    # --- Graph analysis ---
+    graph_kind = classify_graph_kind(adj)
+    identifiability = get_identifiable_edges(adj, names)
+    edges = adj_to_edges(adj, names)
+    n_directed = sum(1 for e in edges if e["type"] == "directed")
+    n_undirected = sum(1 for e in edges if e["type"] == "undirected")
+    n_bidirected = sum(1 for e in edges if e["type"] == "bidirected")
+    n_edges = len(edges)
+    n_nodes = len(names)
+
+    graph_stats = {
+        "n_nodes": n_nodes,
+        "n_edges": n_edges,
+        "n_directed": n_directed,
+        "n_undirected": n_undirected,
+        "n_bidirected": n_bidirected,
+        "density": round(n_edges / max(n_nodes * (n_nodes - 1) / 2, 1), 3),
+    }
+
+    # --- Inference policy ---
+    if graph_kind == "dag":
+        inference_policy = {
+            "eligibility": True,
+            "method": "standard",
+            "reason": "DAG — all causal effects identifiable",
+            "assumptions_used": ["causal sufficiency", "faithfulness"],
+        }
+    elif graph_kind == "cpdag":
+        if diagnosis is None:
+            return json.dumps({
+                "status": "needs_more_input",
+                "graph_kind": graph_kind,
+                "graph_stats": graph_stats,
+                "missing_inputs": ["data_diagnosis"],
+                "next_step": (
+                    "CPDAG inference requires data diagnosis (linearity + gaussianity). "
+                    "Use run_id from discover/run_algorithm, or provide data_diagnosis "
+                    "with linearity and gaussian_error fields."
+                ),
+            })
+        is_lg = bool(diagnosis.get("linearity")) and bool(diagnosis.get("gaussian_error"))
+        policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
+        inference_policy = {
+            "eligibility": policy["allow_inference"],
+            "method": policy["method"],
+            "reason": policy["reason"],
+            "assumptions_used": (
+                ["linearity", "Gaussian errors", "causal sufficiency"]
+                if is_lg else ["causal sufficiency", "faithfulness"]
+            ),
+        }
+    elif graph_kind == "pag":
+        inference_policy = {
+            "eligibility": False,
+            "method": None,
+            "reason": "PAG — latent confounders possible, effects not identifiable",
+            "assumptions_used": [],
+        }
+    else:
+        inference_policy = {
+            "eligibility": False,
+            "method": None,
+            "reason": f"Unknown graph kind: {graph_kind}",
+            "assumptions_used": [],
+        }
+
+    # --- Query assessment (optional) ---
+    query_assessment = None
+    if treatment or outcome:
+        if not treatment or not outcome:
+            return json.dumps({
+                "status": "error",
+                "error": "Both treatment and outcome must be provided together.",
+            })
+        if treatment == outcome:
+            return json.dumps({
+                "status": "error",
+                "error": "Treatment and outcome must be different variables.",
+            })
+        if treatment not in names:
+            return json.dumps({
+                "status": "error",
+                "error": f"Treatment '{treatment}' not in node_names.",
+            })
+        if outcome not in names:
+            return json.dumps({
+                "status": "error",
+                "error": f"Outcome '{outcome}' not in node_names.",
+            })
+
+        src_idx = names.index(treatment)
+        tgt_idx = names.index(outcome)
+        path_exists = _has_directed_path(adj, src_idx, tgt_idx)
+        directly_connected = bool(adj[tgt_idx, src_idx] == 1)
+
+        query_assessment = {
+            "treatment": treatment,
+            "outcome": outcome,
+            "directly_connected": directly_connected,
+            "directed_path_exists": path_exists,
+            "effect_identifiable": inference_policy["eligibility"] and path_exists,
+            "method": inference_policy["method"] if path_exists else None,
+        }
+
+    # --- Summary ---
+    summary = (
+        f"{graph_kind.upper()} with {n_nodes} variables, {n_edges} edges "
+        f"({n_directed} directed, {n_undirected} undirected, "
+        f"{n_bidirected} bidirected)."
+    )
+
+    key_findings = []
+    if graph_kind == "dag":
+        key_findings.append("Fully oriented DAG — all effects identifiable")
+    elif graph_kind == "cpdag":
+        key_findings.append(f"CPDAG — {n_undirected} edge directions ambiguous")
+    elif graph_kind == "pag":
+        key_findings.append("PAG — latent confounders possible")
+
+    if inference_policy["eligibility"]:
+        key_findings.append(
+            f"Causal inference possible via {inference_policy['method']}"
+        )
+    else:
+        key_findings.append(
+            f"Causal inference blocked: {inference_policy['reason']}"
+        )
+
+    if query_assessment:
+        if query_assessment["effect_identifiable"]:
+            key_findings.append(
+                f"Effect of {treatment} on {outcome} is identifiable"
+            )
+        elif query_assessment["directed_path_exists"]:
+            key_findings.append(
+                f"Path {treatment} -> {outcome} exists but effect not identifiable"
+            )
+        else:
+            key_findings.append(
+                f"No directed path from {treatment} to {outcome}"
+            )
+
+    limitations = []
+    if graph_kind != "dag":
+        limitations.append(
+            f"Graph is {graph_kind.upper()} — some causal directions uncertain"
+        )
+    if n_bidirected > 0:
+        limitations.append(
+            f"{n_bidirected} bidirected edges suggest latent confounders"
+        )
+
+    # --- Result ---
+    result: dict[str, Any] = {
+        "status": "ok",
+        "graph_kind": graph_kind,
+        "graph_stats": graph_stats,
+        "identifiability": identifiability,
+        "inference_policy": inference_policy,
+        "summary": summary,
+        "key_findings": key_findings,
+        "limitations": limitations,
+    }
+
+    if query_assessment:
+        result["query_assessment"] = query_assessment
+
+    return json.dumps(result, indent=2, cls=_NumpyEncoder)
 
 
 # ── MCP Resources ─────────────────────────────────────────────────────

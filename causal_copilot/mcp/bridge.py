@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -160,3 +161,105 @@ def serialize_result(gs, node_names=None, provenance=None):
     }
 
     return result
+
+
+def generate_discovery_summary(result):
+    """Generate deterministic summary from structured discovery result.
+
+    Returns dict with summary, key_findings, limitations, algorithm_rationale.
+    All fields derived from structured state — no LLM calls.
+    """
+    graph_kind = result.get("graph_kind", "unknown")
+    node_names = result.get("node_names", [])
+    edges = result.get("edges", [])
+    n_directed = result.get("n_directed", 0)
+    n_undirected = result.get("n_undirected", 0)
+    n_bidirected = result.get("n_bidirected", 0)
+    provenance = result.get("provenance", {})
+    algo = provenance.get("algorithm", "unknown")
+    planner = provenance.get("planner", "unknown")
+    diagnosis = result.get("data_diagnosis", {})
+    n_nodes = len(node_names)
+    n_edges = len(edges)
+
+    # Summary
+    summary = (
+        f"Causal discovery on {n_nodes} variables using {algo}. "
+        f"{n_edges} edges ({n_directed} directed, {n_undirected} undirected, "
+        f"{n_bidirected} bidirected). Graph type: {graph_kind.upper()}."
+    )
+
+    # Key findings
+    key_findings = []
+    if graph_kind == "dag":
+        key_findings.append("Fully oriented DAG — all causal directions determined")
+    elif graph_kind == "cpdag":
+        key_findings.append(
+            f"CPDAG — {n_directed} edges oriented, {n_undirected} ambiguous"
+        )
+    elif graph_kind == "pag":
+        key_findings.append("PAG — possible latent confounders detected")
+
+    if n_directed > 0:
+        sources = Counter(e["from"] for e in edges if e["type"] == "directed")
+        if sources:
+            top_name, top_count = sources.most_common(1)[0]
+            key_findings.append(
+                f"Most influential variable: {top_name} ({top_count} outgoing edges)"
+            )
+
+    if n_edges == 0:
+        key_findings.append("No edges discovered — variables appear independent")
+
+    # Limitations
+    limitations = []
+    if graph_kind == "cpdag":
+        limitations.append(
+            "Some edge directions ambiguous — consider LiNGAM for unique DAG "
+            "if data is non-Gaussian"
+        )
+    elif graph_kind == "pag":
+        limitations.append(
+            "Latent confounders possible — causal effect estimation unreliable"
+        )
+
+    if diagnosis:
+        sample_size = diagnosis.get("sample_size")
+        if sample_size and sample_size < 100:
+            limitations.append(
+                f"Small sample ({sample_size} rows) — results may be unstable"
+            )
+
+    limitations.append(
+        "Observational data cannot prove causation — validate with domain knowledge"
+    )
+
+    # Algorithm rationale
+    if planner == "llm":
+        rationale = f"LLM pipeline selected {algo} based on data characteristics"
+    elif planner == "rule-based-fallback":
+        rationale = f"Rule-based fallback selected {algo} (LLM unavailable)"
+    elif planner == "user-specified":
+        rationale = f"User specified {algo}"
+    else:
+        rationale = f"{algo} selected by {planner}"
+
+    if diagnosis:
+        reasons = []
+        if diagnosis.get("linearity") is False:
+            reasons.append("nonlinear data")
+        if diagnosis.get("gaussian_error") is False:
+            reasons.append("non-Gaussian errors")
+        if diagnosis.get("time_series"):
+            reasons.append("time-series structure")
+        if diagnosis.get("missingness"):
+            reasons.append("missing data")
+        if reasons:
+            rationale += f" ({', '.join(reasons)})"
+
+    return {
+        "summary": summary,
+        "key_findings": key_findings,
+        "limitations": limitations,
+        "algorithm_rationale": rationale,
+    }

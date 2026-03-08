@@ -1,4 +1,4 @@
-"""Integration test: verify MCP server starts and tools are registered."""
+"""Integration test: verify MCP server starts and 4 tools are registered."""
 import asyncio
 
 import pytest
@@ -11,12 +11,22 @@ class TestServerRegistration:
         tools = asyncio.run(mcp.list_tools())
         tool_names = {t.name for t in tools}
         expected = {
-            "analyze", "diagnose_data", "run_algorithm", "discover",
-            "refine_graph", "estimate_effects", "explain_graph",
-            "explain_result", "list_algorithms",
+            "discover", "inspect_graph", "diagnose_data", "run_algorithm",
         }
         for t in expected:
             assert t in tool_names, f"Tool '{t}' not registered"
+
+    def test_no_deleted_tools(self):
+        from causal_copilot.mcp.server import mcp
+
+        tools = asyncio.run(mcp.list_tools())
+        tool_names = {t.name for t in tools}
+        deleted = {
+            "analyze", "explain_graph", "explain_result",
+            "estimate_effects", "refine_graph", "list_algorithms",
+        }
+        for t in deleted:
+            assert t not in tool_names, f"Deleted tool '{t}' still registered"
 
     def test_prompts_registered(self):
         from causal_copilot.mcp.server import mcp
@@ -30,8 +40,7 @@ class TestServerRegistration:
         from causal_copilot.mcp.server import mcp
 
         tools = asyncio.run(mcp.list_tools())
-        # At least 9 tools expected
-        assert len(tools) >= 9
+        assert len(tools) == 4
 
     def test_mcp_cli_entry(self):
         from causal_copilot.cli import main

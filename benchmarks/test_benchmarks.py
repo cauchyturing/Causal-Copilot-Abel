@@ -144,3 +144,41 @@ class TestExpandedMetrics:
         assert "shd" in d
         assert "skeleton_f1" in d
         assert "orientation_accuracy" in d
+
+
+# ---------------------------------------------------------------------------
+# Standard benchmark datasets
+# ---------------------------------------------------------------------------
+
+from benchmarks.datasets import STANDARD_DATASETS, StandardDataset
+
+
+class TestStandardDatasets:
+    def test_has_standard_datasets(self):
+        assert len(STANDARD_DATASETS) >= 3
+
+    @pytest.mark.parametrize("name", ["sachs", "asia", "alarm"])
+    def test_dataset_structure(self, name):
+        ds = STANDARD_DATASETS[name]
+        assert isinstance(ds, StandardDataset)
+        assert ds.data.shape[0] > 0
+        assert ds.data.shape[1] > 1
+        assert ds.ground_truth.shape[0] == ds.ground_truth.shape[1]
+        assert ds.ground_truth.shape[0] == ds.data.shape[1]
+        assert len(ds.columns) == ds.data.shape[1]
+
+    @pytest.mark.parametrize("name", ["sachs", "asia", "alarm"])
+    def test_dataset_ground_truth_is_dag(self, name):
+        ds = STANDARD_DATASETS[name]
+        gt = ds.ground_truth
+        assert np.all(np.diag(gt) == 0)
+        n = gt.shape[0]
+        power = np.eye(n)
+        for _ in range(n):
+            power = power @ (gt > 0).astype(float)
+        assert np.all(np.diag(power) == 0), f"DAG check failed for {name}"
+
+    def test_dataset_deterministic(self):
+        ds1 = STANDARD_DATASETS["sachs"]
+        ds2 = STANDARD_DATASETS["sachs"]
+        np.testing.assert_array_equal(ds1.data.values, ds2.data.values)

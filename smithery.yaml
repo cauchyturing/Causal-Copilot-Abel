@@ -7,7 +7,10 @@ startCommand:
     properties:
       openaiApiKey:
         type: string
-        description: "OpenAI API key for LLM-driven algorithm selection"
+        description: "OpenAI API key (when llmProvider=openai)"
+      openrouterApiKey:
+        type: string
+        description: "OpenRouter API key (when llmProvider=openrouter)"
       llmProvider:
         type: string
         description: "LLM provider: openai, openrouter, ollama"
@@ -22,6 +25,7 @@ startCommand:
       args: ['-m', 'causal_copilot.mcp'],
       env: {
         OPENAI_API_KEY: config.openaiApiKey || '',
+        OPENROUTER_API_KEY: config.openrouterApiKey || '',
         LLM_PROVIDER: config.llmProvider || 'openai',
       }
     })

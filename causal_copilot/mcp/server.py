@@ -613,12 +613,16 @@ def refine_graph(
         "n_bidirected": sum(1 for e in edges if e["type"] == "bidirected"),
     }
 
-    # TODO: full bootstrap refinement integration
-    # For now, edge_confidence is 1.0 for all existing edges
+    # Bootstrap refinement not yet integrated — confidence is placeholder.
+    # Do NOT rely on these values for decision-making.
     result["edge_confidence"] = {
-        f"{e['from']}->{e['to']}": 1.0
+        f"{e['from']}->{e['to']}": None
         for e in edges if e["type"] == "directed"
     }
+    result["edge_confidence_note"] = (
+        "Placeholder — bootstrap refinement not yet integrated. "
+        "All values are null. Do not use for decision-making."
+    )
 
     if run_id:
         result["run_id"] = run_id
@@ -732,19 +736,22 @@ def estimate_effects(
     identifiability = get_identifiable_edges(adj, names)
 
     result: dict[str, Any] = {
-        "status": "ok",
+        "status": "partial",
         "treatment": treatment,
         "outcome": outcome,
         "graph_kind": policy["graph_kind"],
         "inference_method": policy["method"],
         "policy_reason": policy["reason"],
         "identifiability": identifiability,
+        "effect_estimate": None,
     }
 
-    # TODO: full inference pipeline integration (DML, IDA, etc.)
+    # Effect estimation pipeline (DML, IDA, etc.) not yet integrated.
+    # Status is "partial" — policy check passed, but no numeric estimate.
     result["note"] = (
-        f"Inference is valid via '{policy['method']}' method. "
-        "Full effect estimation will be integrated in a future version."
+        f"PDAG policy allows inference via '{policy['method']}'. "
+        "Numeric effect estimation not yet integrated — "
+        "effect_estimate is null. Coming in v0.3.1."
     )
 
     if run_id:
@@ -815,6 +822,7 @@ def discover(
             _ = stat_text  # available for LLM prompts; unused in offline path
 
             # 2. Algorithm selection
+            used_planner = "user-specified"
             if algorithm:
                 # User override — skip LLM selection
                 gs.algorithm.selected_algorithm = algorithm
@@ -835,6 +843,7 @@ def discover(
                     gs = Filter(args).forward(gs)
                     gs = Reranker(args).forward(gs)
                     gs = HyperparameterSelector(args).forward(gs)
+                    used_planner = "llm"
                 except Exception as llm_err:
                     warnings.append(
                         f"LLM selection failed, using rule-based: {llm_err}"
@@ -849,6 +858,7 @@ def discover(
                     gs.algorithm.algorithm_arguments = get_default_hp(
                         gs.algorithm.selected_algorithm, gs.statistics,
                     )
+                    used_planner = "rule-based-fallback"
 
             # 3. Resolver overrides (CI test / score func)
             algo_name = gs.algorithm.selected_algorithm
@@ -890,7 +900,7 @@ def discover(
             "algorithm": gs.algorithm.selected_algorithm,
             "hyperparameters": gs.algorithm.algorithm_arguments,
             "seed": seed,
-            "planner": "llm" if not algorithm else "user-specified",
+            "planner": used_planner,
         }
         result = serialize_result(gs, node_names=node_names, provenance=provenance)
 

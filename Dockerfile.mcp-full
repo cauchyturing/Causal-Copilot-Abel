@@ -24,7 +24,7 @@ RUN useradd -m mcp && chown -R mcp:mcp /app
 USER mcp
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 0
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
 EXPOSE 8000
 ENTRYPOINT ["python", "-m", "causal_copilot.mcp", "--http"]

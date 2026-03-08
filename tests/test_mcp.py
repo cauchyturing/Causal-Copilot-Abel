@@ -344,9 +344,10 @@ class TestEstimateEffectsTool:
             json.dumps(adj), json.dumps(names), csv,
             treatment="X", outcome="Y",
         ))
-        assert result["status"] == "ok"
+        assert result["status"] == "partial"
         assert result["inference_method"] == "standard"
         assert result["graph_kind"] == "dag"
+        assert result["effect_estimate"] is None
 
     def test_pag_rejects_inference(self):
         from causal_copilot.mcp.server import estimate_effects

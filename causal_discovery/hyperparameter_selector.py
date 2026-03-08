@@ -3,7 +3,9 @@ import torch
 import causal_discovery.wrappers as wrappers
 from llm import LLMClient
 from utils.logger import logger
-from .context.algos.utils.json2txt import create_filtered_benchmarking_results, create_filtered_benchmarking_results_ts 
+from .context.algos.utils.json2txt import create_filtered_benchmarking_results, create_filtered_benchmarking_results_ts
+from .ci_test_resolver import resolve_ci_test
+from .score_resolver import resolve_score_func
 
 class HyperparameterSelector:
     def __init__(self, args):
@@ -23,6 +25,25 @@ class HyperparameterSelector:
         # Select hyperparameters
         hyper_suggest = self.select_hyperparameters(global_state, selected_algo, hp_context, algorithm_optimum_reason)
         global_state.algorithm.algorithm_arguments = hyper_suggest
+
+        # Deterministic resolver overrides — correct any LLM CI test / score func mistakes
+        algo_args = global_state.algorithm.algorithm_arguments or {}
+        algo_name = global_state.algorithm.selected_algorithm
+
+        ci_test_algos = {"PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
+                         "BAMB", "HITONMB", "IAMBnPC", "MBOR"}
+        if algo_name in ci_test_algos and "indep_test" in algo_args:
+            algo_args["indep_test"] = resolve_ci_test(global_state.statistics)
+
+        score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
+        if algo_name in score_algos and "score_func" in algo_args:
+            algo_args["score_func"] = resolve_score_func(global_state.statistics, algo_name)
+
+        if algo_name == "PC" and global_state.statistics.missingness:
+            algo_args["mvpc"] = True
+
+        global_state.algorithm.algorithm_arguments = algo_args
+
         return global_state
         
 

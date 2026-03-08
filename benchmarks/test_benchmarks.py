@@ -104,3 +104,43 @@ class TestEvaluation:
         pred = np.array([[0, 0], [1, 0]])
         m = evaluate_adjacency(pred, gt)
         assert m.shd == 2  # 1 missing + 1 extra
+
+
+# ---------------------------------------------------------------------------
+# Expanded metrics (skeleton, orientation, FDR)
+# ---------------------------------------------------------------------------
+
+
+class TestExpandedMetrics:
+    def test_skeleton_metrics(self):
+        """Skeleton ignores direction — only checks adjacency."""
+        pred = np.array([[0, 0], [1, 0]])  # Y->X
+        gt = np.array([[0, 1], [0, 0]])    # X->Y
+        m = evaluate_adjacency(pred, gt)
+        assert m.skeleton_precision == 1.0
+        assert m.skeleton_recall == 1.0
+        assert m.orientation_accuracy < 1.0
+
+    def test_fdr(self):
+        pred = np.array([[0, 1, 1], [0, 0, 0], [0, 0, 0]])
+        gt = np.array([[0, 1, 0], [0, 0, 0], [0, 0, 0]])
+        m = evaluate_adjacency(pred, gt)
+        assert m.fdr == pytest.approx(0.5)
+
+    def test_empty_pred_metrics(self):
+        gt = np.array([[0, 1], [0, 0]])
+        pred = np.zeros((2, 2))
+        m = evaluate_adjacency(pred, gt)
+        assert m.precision == 0.0
+        assert m.recall == 0.0
+        assert m.fdr == 0.0
+
+    def test_metrics_to_dict(self):
+        pred = np.array([[0, 1], [0, 0]])
+        gt = np.array([[0, 1], [0, 0]])
+        m = evaluate_adjacency(pred, gt)
+        d = m.to_dict()
+        assert isinstance(d, dict)
+        assert "shd" in d
+        assert "skeleton_f1" in d
+        assert "orientation_accuracy" in d

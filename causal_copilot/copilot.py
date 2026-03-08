@@ -165,6 +165,7 @@ class CausalCopilot:
         *,
         planner: str | None = None,
         algorithm: str | None = None,
+        algorithm_params: dict[str, Any] | None = None,
         timeout: int = 300,
         seed: int = 42,
     ) -> CausalResult:
@@ -175,6 +176,7 @@ class CausalCopilot:
             data: CSV file path or DataFrame.
             planner: Override instance planner (must be valid).
             algorithm: Force a specific algorithm (bypasses planner).
+            algorithm_params: Custom hyperparameters (merged on top of defaults).
             timeout: Max seconds for algorithm execution (default 300).
             seed: Random seed for reproducibility (default 42).
 
@@ -265,23 +267,24 @@ class CausalCopilot:
         if algorithm:
             decision = PlannerDecision(
                 algorithm=algorithm,
-                hyperparams={},
+                hyperparams=algorithm_params or {},
                 reason=f"User specified algorithm: {algorithm}",
             )
         else:
             properties = detect_data_properties(numeric_df)
             decision = rule_based_select(properties)
 
-        # Load algorithm
+        # Load algorithm — merge defaults with user/LLM overrides
         try:
             algo = _load_algorithm(decision.algorithm, decision.hyperparams)
-            # For forced algorithms with empty hyperparams, record effective defaults
-            if not decision.hyperparams:
-                decision = PlannerDecision(
-                    algorithm=decision.algorithm,
-                    hyperparams=algo.default_params(),
-                    reason=decision.reason,
-                )
+            effective = algo.default_params()
+            effective.update(decision.hyperparams)
+            decision = PlannerDecision(
+                algorithm=decision.algorithm,
+                hyperparams=effective,
+                reason=decision.reason,
+            )
+            algo = _load_algorithm(decision.algorithm, effective)
         except (ValueError, ImportError) as e:
             return CausalResult(
                 status="failed",

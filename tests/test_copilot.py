@@ -346,6 +346,43 @@ class TestEdgeCounting:
 
 
 # ---------------------------------------------------------------------------
+# Custom algorithm_params
+# ---------------------------------------------------------------------------
+
+
+class TestAlgorithmParams:
+    def test_custom_params_reach_provenance(self, simple_df):
+        """Custom params via algorithm_params= must appear in provenance."""
+        with _mock_algorithm():
+            result = CausalCopilot().analyze(
+                simple_df, algorithm="PC", algorithm_params={"alpha": 0.01}, seed=0
+            )
+        assert result.status == "ok"
+        assert result.provenance is not None
+        hp_dict = dict(result.provenance.hyperparams)
+        assert hp_dict.get("alpha") == 0.01
+
+    def test_custom_params_merge_with_defaults(self, simple_df):
+        """algorithm_params should merge on top of defaults."""
+        with _mock_algorithm():
+            result = CausalCopilot().analyze(
+                simple_df, algorithm="PC", algorithm_params={"alpha": 0.01}, seed=0
+            )
+        hp_dict = dict(result.provenance.hyperparams)
+        # Should have both the mock default and the override
+        assert hp_dict.get("mock_param") is True  # from default_params()
+        assert hp_dict.get("alpha") == 0.01  # from algorithm_params
+
+    def test_algorithm_params_default_is_none(self, simple_df):
+        """Without algorithm_params, defaults should be used (existing behavior)."""
+        with _mock_algorithm():
+            result = CausalCopilot().analyze(simple_df, algorithm="PC", seed=0)
+        assert result.status == "ok"
+        hp_dict = dict(result.provenance.hyperparams)
+        assert hp_dict.get("mock_param") is True
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

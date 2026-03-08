@@ -1,0 +1,40 @@
+# ICALiNGAM Algorithm Profile
+
+## 1. Best Use Cases
+
+ICALiNGAM (Independent Component Analysis Linear Non-Gaussian Acyclic Model) is optimized for:
+
+- **Linear Causal Systems**: Effective when causal relationships are linear
+- **Non-Gaussian Data**: Leverages non-Gaussianity of error terms for identifiability
+- **Complete DAG Recovery**: Recovers a unique DAG (not just equivalence class) under assumptions
+- **Small to Moderate Problems**: Works well with up to ~30-50 variables
+
+**Optimal Domains**:
+- Datasets where non-Gaussian noise is expected
+- Gene regulatory network inference
+- Financial and economic causal modeling
+
+**Not Recommended For**:
+- Systems with Gaussian error distributions (identifiability breaks down)
+- Highly non-linear causal relationships
+- Cyclic causal structures
+- Very high-dimensional problems
+
+## 2. Hyperparameter Sensitivity
+
+ICALiNGAM has minimal hyperparameter requirements:
+
+- **Number of Hyperparameters**: Two (random_state and max_iter)
+- **Default Performance**: Default settings perform well in most scenarios
+- **Sensitivity**: Low — the algorithm is relatively robust to parameter choices
+
+## 3. Computational Complexity
+
+- **Time Complexity**: O(n * p^3) where n is samples and p is variables
+- **Space Complexity**: O(p^2) for the adjacency matrix
+- **Scalability**: Suitable for small to moderate problems (p < 50)
+
+## 4. Output Type
+
+- Outputs a **DAG** (directed acyclic graph)
+- Edge weights represent estimated causal effect strengths

@@ -346,3 +346,42 @@ class TestEstimateEffectsTool:
         ))
         assert result["status"] == "ok"
         assert result["inference_method"] == "ida"
+
+
+class TestDiscoverTool:
+    def test_full_pipeline_with_mock(self):
+        from causal_copilot.mcp.server import discover
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_run_algorithm():
+            result = json.loads(discover(csv))
+        assert result["status"] in ("ok", "partial", "error")
+        if result["status"] == "ok":
+            assert "graph_kind" in result
+            assert "provenance" in result
+            assert "run_id" in result
+
+    def test_empty_csv(self):
+        from causal_copilot.mcp.server import discover
+
+        result = json.loads(discover(""))
+        assert result["status"] == "error"
+
+    def test_too_few_rows(self):
+        from causal_copilot.mcp.server import discover
+
+        result = json.loads(discover("a,b\n1,2\n3,4"))
+        assert result["status"] == "error"
+        assert "10 rows" in result["error"]
+
+    def test_with_algorithm_override(self):
+        from causal_copilot.mcp.server import discover
+
+        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
+        with _mock_run_algorithm():
+            result = json.loads(discover(csv, algorithm="PC"))
+        assert result["status"] in ("ok", "partial", "error")

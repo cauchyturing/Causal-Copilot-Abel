@@ -730,3 +730,162 @@ def estimate_effects(
         result["run_id"] = run_id
 
     return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def discover(
+    csv_data: str,
+    query: str = "",
+    algorithm: str = "",
+    seed: int = 42,
+    timeout: int = 300,
+) -> str:
+    """Full autonomous causal discovery pipeline.
+
+    Analyzes data characteristics, selects the best algorithm (or uses specified one),
+    tunes hyperparameters, executes, and refines the result. This is the primary tool —
+    use it when you want the system to handle everything.
+
+    Args:
+        csv_data: CSV string with header row
+        query: Optional causal question (helps LLM select algorithm)
+        algorithm: Optional algorithm override (skips LLM selection)
+        seed: Random seed
+        timeout: Timeout in seconds
+
+    Returns:
+        JSON with adjacency_matrix, edges, graph_kind, identifiability,
+        data_diagnosis, provenance, run_id, warnings
+    """
+    # -- Parse & validate ------------------------------------------------
+    try:
+        df = pd.read_csv(io.StringIO(csv_data))
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+
+    if df.empty or df.shape[1] < 2:
+        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+
+    if len(df) < 10:
+        return json.dumps({
+            "status": "error",
+            "error": f"Need at least 10 rows of data (got {len(df)}).",
+        })
+
+    warnings: list[str] = []
+
+    try:
+        from causal_discovery.ci_test_resolver import resolve_ci_test
+        from causal_discovery.hyperparameter_selector import HyperparameterSelector
+        from causal_discovery.program import Programming
+        from causal_discovery.score_resolver import resolve_score_func
+        from preprocess.stat_info_functions import (
+            convert_stat_info_to_text,
+            stat_info_collection,
+        )
+
+        gs = make_global_state(df, query=query, algorithm=algorithm or None, seed=seed)
+        args = make_args(query=query, seed=seed)
+
+        with _pipeline_cwd():
+            # 1. Statistical analysis
+            gs = stat_info_collection(gs)
+            stat_text = convert_stat_info_to_text(gs.statistics)
+            _ = stat_text  # available for LLM prompts; unused in offline path
+
+            # 2. Algorithm selection
+            if algorithm:
+                # User override — skip LLM selection
+                gs.algorithm.selected_algorithm = algorithm
+                try:
+                    gs = HyperparameterSelector(args).forward(gs)
+                except Exception as hp_err:
+                    warnings.append(f"HP selector failed, using defaults: {hp_err}")
+                    from causal_copilot.mcp.offline import get_default_hp
+                    gs.algorithm.algorithm_arguments = get_default_hp(
+                        algorithm, gs.statistics,
+                    )
+            else:
+                # Full LLM path: Filter → Reranker → HP
+                try:
+                    from causal_discovery.filter import Filter
+                    from causal_discovery.rerank import Reranker
+
+                    gs = Filter(args).forward(gs)
+                    gs = Reranker(args).forward(gs)
+                    gs = HyperparameterSelector(args).forward(gs)
+                except Exception as llm_err:
+                    warnings.append(
+                        f"LLM selection failed, using rule-based: {llm_err}"
+                    )
+                    from causal_copilot.mcp.offline import (
+                        get_default_hp,
+                        select_algorithm_offline,
+                    )
+                    gs.algorithm.selected_algorithm = select_algorithm_offline(
+                        gs.statistics,
+                    )
+                    gs.algorithm.algorithm_arguments = get_default_hp(
+                        gs.algorithm.selected_algorithm, gs.statistics,
+                    )
+
+            # 3. Resolver overrides (CI test / score func)
+            algo_name = gs.algorithm.selected_algorithm
+            algo_args = dict(gs.algorithm.algorithm_arguments or {})
+
+            ci_test_algos = {
+                "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
+                "BAMB", "HITONMB", "IAMBnPC", "MBOR",
+            }
+            if algo_name in ci_test_algos:
+                algo_args["indep_test"] = resolve_ci_test(gs.statistics)
+
+            score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
+            if algo_name in score_algos:
+                algo_args["score_func"] = resolve_score_func(
+                    gs.statistics, algo_name,
+                )
+
+            if algo_name == "PC" and gs.statistics.missingness:
+                algo_args["mvpc"] = True
+
+            gs.algorithm.algorithm_arguments = algo_args
+
+            # 4. Execute
+            gs = Programming(args).forward(gs)
+
+            # 5. Postprocess (skip for time-series)
+            is_ts = getattr(gs.statistics, "time_series", False)
+            if not is_ts:
+                try:
+                    from postprocess.judge import Judge
+                    gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
+                except Exception as pp_err:
+                    warnings.append(f"Postprocessing skipped: {pp_err}")
+
+        # 6. Serialize
+        node_names = gs.user_data.selected_features
+        provenance = {
+            "algorithm": gs.algorithm.selected_algorithm,
+            "hyperparameters": gs.algorithm.algorithm_arguments,
+            "seed": seed,
+            "planner": "llm" if not algorithm else "user-specified",
+        }
+        result = serialize_result(gs, node_names=node_names, provenance=provenance)
+
+        if warnings:
+            result["warnings"] = warnings
+
+        # Save to artifact store
+        run_id = get_store().save(result)
+        result["run_id"] = run_id
+
+        return json.dumps(result, indent=2, cls=_NumpyEncoder)
+    except Exception as e:
+        payload: dict[str, Any] = {
+            "status": "error",
+            "error": f"Pipeline failed: {e}",
+        }
+        if warnings:
+            payload["warnings"] = warnings
+        return json.dumps(payload)

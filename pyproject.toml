@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "causal-copilot"
-version = "0.1.0dev0"
+version = "0.3.0dev0"
 description = "Autonomous causal analysis from tabular data — LLM-driven discovery + inference."
 readme = "README.md"
 license = "MIT"

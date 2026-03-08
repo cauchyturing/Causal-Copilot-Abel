@@ -15,7 +15,7 @@ class TestVersion:
         main(["version"])
         out = capsys.readouterr().out
         assert "causal-copilot" in out
-        assert "0.1" in out
+        assert "0.3" in out
 
 
 class TestDoctor:

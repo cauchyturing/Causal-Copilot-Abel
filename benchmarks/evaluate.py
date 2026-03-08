@@ -47,28 +47,41 @@ def _skeleton(adj: np.ndarray) -> np.ndarray:
 def evaluate_adjacency(predicted: np.ndarray, ground_truth: np.ndarray) -> DiscoveryMetrics:
     """Compare predicted adjacency matrix against ground truth.
 
-    Both matrices use convention: mat[i,j]=1 means j->i.
-    Predicted values >0 are treated as edges (handles 1/2/3 encoding).
+    Both matrices use convention: mat[i,j]=1 means j->i (directed),
+    2=undirected, 3=bidirected.
+
+    Directed edge metrics use exact cell comparison: pred[i,j] must equal
+    gt[i,j] for a true positive. An undirected prediction (2) where ground
+    truth has a directed edge (1) counts as both FP and FN — the predicted
+    edge type is wrong and the correct type is missing.
+
+    Skeleton metrics ignore direction (any nonzero value counts as an edge).
+    Orientation accuracy measures how many skeleton-correct edges also have
+    the correct direction.
     """
-    pred_binary = (predicted > 0).astype(int)
-    gt_binary = (ground_truth > 0).astype(int)
+    pred_has_edge = (predicted > 0).astype(int)
+    gt_has_edge = (ground_truth > 0).astype(int)
 
     # --- Directed (edge-level) metrics ---
-    tp = int(np.sum((pred_binary == 1) & (gt_binary == 1)))
-    fp = int(np.sum((pred_binary == 1) & (gt_binary == 0)))
-    fn = int(np.sum((pred_binary == 0) & (gt_binary == 1)))
+    # TP: edge exists in both AND has same type
+    tp = int(np.sum((pred_has_edge == 1) & (gt_has_edge == 1) & (predicted == ground_truth)))
+    # FP: edge in pred but not in gt
+    fp_extra = int(np.sum((pred_has_edge == 1) & (gt_has_edge == 0)))
+    # FP also includes wrong edge type (e.g. undirected where directed expected)
+    fp_wrong_type = int(np.sum((pred_has_edge == 1) & (gt_has_edge == 1) & (predicted != ground_truth)))
+    fp = fp_extra + fp_wrong_type
+    # FN: edge in gt but not in pred, plus missed correct type
+    fn_missing = int(np.sum((pred_has_edge == 0) & (gt_has_edge == 1)))
+    fn = fn_missing + fp_wrong_type
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
     fdr = fp / (fp + tp) if (fp + tp) > 0 else 0.0
 
-    # SHD = |edges in pred but not gt| + |edges in gt but not pred| + |reversed edges|
-    shd = int(np.sum(pred_binary != gt_binary))
-
     # --- Skeleton (undirected) metrics ---
-    skel_pred = _skeleton(pred_binary)
-    skel_gt = _skeleton(gt_binary)
+    skel_pred = _skeleton(pred_has_edge)
+    skel_gt = _skeleton(gt_has_edge)
 
     skel_tp = int(np.sum((skel_pred == 1) & (skel_gt == 1)))
     skel_fp = int(np.sum((skel_pred == 1) & (skel_gt == 0)))
@@ -82,23 +95,28 @@ def evaluate_adjacency(predicted: np.ndarray, ground_truth: np.ndarray) -> Disco
         else 0.0
     )
 
-    # --- Orientation accuracy ---
-    # Of edges that are correct in the skeleton, how many have the correct direction?
-    # For each undirected edge present in both skeletons, check if the directed
-    # edges match exactly.
+    # --- Orientation accuracy + SHD ---
+    # SHD (Structural Hamming Distance) = extra + missing + reversed at
+    # skeleton level.  A reversed edge counts as ONE edit, not two.
+    # Orientation accuracy = fraction of shared-skeleton edges with correct
+    # directed representation (compares actual cell values, not binary).
     shared_skeleton = (skel_pred == 1) & (skel_gt == 1)
+    reversed_edges = 0
+    correct_orientation = 0
+    total_shared = 0
     if np.sum(shared_skeleton) > 0:
-        correct_orientation = 0
-        total_shared = 0
         rows, cols = np.where(shared_skeleton)
         for r, c in zip(rows, cols):
             total_shared += 1
-            # Check if directed edges between r and c match in both directions
-            if pred_binary[r, c] == gt_binary[r, c] and pred_binary[c, r] == gt_binary[c, r]:
+            if predicted[r, c] == ground_truth[r, c] and predicted[c, r] == ground_truth[c, r]:
                 correct_orientation += 1
+            else:
+                reversed_edges += 1
         orientation_accuracy = correct_orientation / total_shared
     else:
         orientation_accuracy = 0.0
+
+    shd = skel_fp + skel_fn + reversed_edges
 
     return DiscoveryMetrics(
         true_positives=tp,

@@ -1,7 +1,7 @@
 """Standard benchmark datasets for causal discovery evaluation.
 
-Provides well-known DAGs (Sachs, Asia, ALARM) with synthetically generated
-linear Gaussian data matching the known ground-truth structure.
+Provides well-known DAGs (Sachs, Asia) and a synthetic ALARM-scale graph,
+each with linear Gaussian data generated from the ground-truth structure.
 """
 
 from __future__ import annotations
@@ -90,12 +90,17 @@ def _build_sachs() -> StandardDataset:
     adj = np.zeros((n, n), dtype=int)
 
     # Edges: source -> target means adj[target, source] = 1
+    # 17-edge consensus network from Sachs et al. 2005, Science 308(5721),
+    # Fig. 3A.  Note: the bnlearn repository version differs (has Akt→Erk
+    # instead of PIP3→Akt and PKA→Akt).  We follow the original paper.
     edges = [
         ("PLCg", "PIP2"), ("PLCg", "PIP3"), ("PIP3", "PIP2"),
-        ("PKC", "Raf"), ("PKA", "Raf"), ("PKA", "Mek"),
-        ("PKA", "Erk"), ("PKA", "Akt"), ("PKA", "JNK"), ("PKA", "P38"),
-        ("PKC", "Mek"), ("PKC", "JNK"), ("PKC", "P38"),
-        ("Raf", "Mek"), ("Mek", "Erk"), ("Erk", "Akt"), ("PIP3", "Akt"),
+        ("PIP3", "Akt"),
+        ("PKC", "PKA"), ("PKC", "Raf"), ("PKC", "Mek"),
+        ("PKC", "JNK"), ("PKC", "P38"),
+        ("PKA", "Raf"), ("PKA", "Mek"), ("PKA", "Erk"),
+        ("PKA", "Akt"), ("PKA", "JNK"), ("PKA", "P38"),
+        ("Raf", "Mek"), ("Mek", "Erk"),
     ]
     for src, tgt in edges:
         adj[col_idx[tgt], col_idx[src]] = 1
@@ -146,19 +151,22 @@ def _build_asia() -> StandardDataset:
 
 
 def _build_alarm() -> StandardDataset:
-    """Beinlich et al. 1989 — 37 nodes, 46 edges. Deterministic sparse DAG."""
+    """Synthetic sparse DAG — 37 nodes, 46 edges (ALARM-scale).
+
+    NOTE: This is NOT the real ALARM network from Beinlich et al. 1989.
+    It is a random sparse DAG of the same scale (37 nodes, 46 edges),
+    useful for testing scalability of causal discovery algorithms.
+    """
     columns = [f"V{i}" for i in range(37)]
     n = len(columns)
     adj = np.zeros((n, n), dtype=int)
 
-    # Deterministic sparse DAG: generate edges using a fixed seed
-    # to create a reproducible 37-node, 46-edge structure
-    rng = np.random.default_rng(1989)  # Year of the ALARM paper
+    # Deterministic sparse DAG using a fixed seed
+    rng = np.random.default_rng(1989)
 
     edges_added = 0
     target_edges = 46
 
-    # Build edges layer by layer to ensure DAG property
     # Edge j -> i only if j < i (topological ordering by index)
     candidate_edges = []
     for i in range(1, n):
@@ -176,11 +184,11 @@ def _build_alarm() -> StandardDataset:
     data = _generate_from_dag(adj, columns, n=1000, seed=44)
     return StandardDataset(
         name="alarm",
-        description="ALARM network (Beinlich et al. 1989) — 37 nodes, 46 edges (synthetic DAG)",
+        description="Synthetic sparse DAG — 37 nodes, 46 edges (ALARM-scale, not the real ALARM network)",
         data=data,
         ground_truth=adj,
         columns=columns,
-        source="Beinlich, I.A. et al. (1989). The ALARM monitoring system: A case study with two probabilistic inference techniques for belief networks. AIME 89:247-256.",
+        source="Synthetic random DAG at ALARM scale. See Beinlich et al. 1989 for the real ALARM network.",
     )
 
 

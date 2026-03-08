@@ -28,32 +28,56 @@ Identifying causality lets scientists look past correlations and uncover the mec
 
 ---
 
-## Python API Quickstart
+## Quick Start (45 seconds)
 
 ```bash
-pip install causal-copilot              # core (offline, no LLM needed)
-pip install causal-copilot[algorithms]  # + algorithm backends (lingam, tigramite, etc.)
+pip install causal-copilot[agent]
+export OPENAI_API_KEY=sk-...   # or use --provider ollama for local LLMs
+causal-copilot agent analyze data.csv --query "What causes high churn?"
 ```
+
+### Provider Options
+
+| Provider | Setup | Command |
+|----------|-------|---------|
+| OpenAI | `export OPENAI_API_KEY=sk-...` | `--provider openai` |
+| OpenRouter | `export OPENROUTER_API_KEY=...` | `--provider openrouter` |
+| Ollama | `ollama serve` (local) | `--provider ollama` |
+| LM Studio | Start LM Studio server | `--provider lmstudio` |
+
+### Python API
 
 ```python
-import pandas as pd
-from causal_copilot import CausalCopilot
+from causal_copilot.agent import AgentCopilot
 
-df = pd.read_csv("your_data.csv")
-result = CausalCopilot().analyze(df, seed=42)
+agent = AgentCopilot(provider="openai")
+result = agent.analyze("data.csv", query="What causes Y?")
 
-print(result.status)             # "ok" | "partial" | "failed"
-print(result.adjacency_matrix)   # numpy array (mat[i,j]=1 means j->i)
-print(result.node_names)         # column names matching matrix indices
-print(result.summary)            # human-readable summary
-print(result.provenance)         # full reproducibility record
+print(result.summary)           # Natural language summary
+print(result.adjacency_matrix)  # Discovered causal graph
+print(result.provenance)        # Full reproducibility record
 ```
 
-**CLI:**
+### Offline Mode (no LLM)
+
+```python
+from causal_copilot import CausalCopilot
+
+copilot = CausalCopilot()  # rule-based, deterministic
+result = copilot.analyze("data.csv", seed=42)
+```
+
+### Benchmarks
+
 ```bash
-causal-copilot analyze data.csv --algorithm PC --seed 42 -o result.json
-causal-copilot quickstart        # synthetic data demo
-causal-copilot doctor            # check dependencies
+causal-copilot benchmark --algorithm PC --scenario linear_chain
+```
+
+### Doctor
+
+```bash
+causal-copilot doctor         # check deps
+causal-copilot doctor --llm   # test LLM connectivity
 ```
 
 See [Technical Report](https://arxiv.org/pdf/2504.13263) for algorithm details.

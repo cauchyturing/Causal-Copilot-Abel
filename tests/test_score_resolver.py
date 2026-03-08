@@ -39,3 +39,13 @@ class TestScoreResolver:
         from causal_discovery.score_resolver import resolve_score_func
         stats = _make_stats(data_type="Category")
         assert resolve_score_func(stats, "FGES") == "local_score_BDeu"
+
+    def test_mixture_returns_cv_general(self):
+        from causal_discovery.score_resolver import resolve_score_func
+        stats = _make_stats(data_type="Mixture")
+        assert resolve_score_func(stats, "GES") == "local_score_CV_general"
+
+    def test_mixed_returns_cv_general(self):
+        from causal_discovery.score_resolver import resolve_score_func
+        stats = _make_stats(data_type="Mixed")
+        assert resolve_score_func(stats, "GES") == "local_score_CV_general"

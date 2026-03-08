@@ -26,7 +26,9 @@ def classify_graph_kind(adj):
     values = set(np.unique(adj).astype(int)) - {0}
     if values & _PAG_TYPES:
         return "pag"
-    if _UNDIRECTED in values or _BIDIRECTED in values:
+    if _BIDIRECTED in values:
+        return "pag"  # bidirected (↔) implies latent confounders
+    if _UNDIRECTED in values:
         return "cpdag"
     return "dag"
 
@@ -104,7 +106,13 @@ def get_identifiable_edges(adj, node_names):
             elif adj[j, i] == _DIRECTED and adj[i, j] == 0:
                 identifiable.append({"from": node_names[i], "to": node_names[j]})
             else:
+                if adj[i, j] == _BIDIRECTED or adj[j, i] == _BIDIRECTED:
+                    edge_type = "bidirected"
+                elif adj[i, j] == _UNDIRECTED or adj[j, i] == _UNDIRECTED:
+                    edge_type = "undirected"
+                else:
+                    edge_type = "pag"
                 ambiguous.append({"nodes": [node_names[i], node_names[j]],
-                                  "type": "undirected" if adj[i, j] == _UNDIRECTED else "pag"})
+                                  "type": edge_type})
 
     return {"identifiable": identifiable, "ambiguous": ambiguous}

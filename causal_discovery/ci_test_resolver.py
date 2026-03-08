@@ -21,6 +21,9 @@ def resolve_ci_test(statistics):
     if statistics.data_type in ("Discrete", "Category", "Binary"):
         return "chisq"
 
+    if statistics.data_type in ("Mixture", "Mixed"):
+        return "kci"  # KCI handles mixed types; fisherz assumes continuous
+
     if statistics.linearity:
         return "fisherz"
 

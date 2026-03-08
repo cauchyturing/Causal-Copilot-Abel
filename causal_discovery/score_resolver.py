@@ -17,6 +17,9 @@ def resolve_score_func(statistics, algorithm):
     if statistics.data_type in ("Discrete", "Category", "Binary"):
         return "local_score_BDeu"
 
+    if statistics.data_type in ("Mixture", "Mixed"):
+        return "local_score_CV_general"  # CV handles mixed; BIC/BDeu assume homogeneous
+
     if not statistics.linearity:
         return "local_score_CV_general"
 

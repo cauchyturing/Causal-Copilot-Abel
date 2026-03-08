@@ -56,3 +56,13 @@ class TestCITestResolver:
         from causal_discovery.ci_test_resolver import resolve_ci_test
         stats = _make_stats(data_type="Binary")
         assert resolve_ci_test(stats) == "chisq"
+
+    def test_mixture_returns_kci(self):
+        from causal_discovery.ci_test_resolver import resolve_ci_test
+        stats = _make_stats(data_type="Mixture")
+        assert resolve_ci_test(stats) == "kci"
+
+    def test_mixed_returns_kci(self):
+        from causal_discovery.ci_test_resolver import resolve_ci_test
+        stats = _make_stats(data_type="Mixed")
+        assert resolve_ci_test(stats) == "kci"

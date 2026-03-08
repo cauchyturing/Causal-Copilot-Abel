@@ -1,0 +1,27 @@
+# smithery.yaml — MCP registry listing
+# https://smithery.ai — enables one-click install in Claude Desktop, Cursor, etc.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      openaiApiKey:
+        type: string
+        description: "OpenAI API key for LLM-driven algorithm selection"
+      llmProvider:
+        type: string
+        description: "LLM provider: openai, openrouter, ollama"
+        default: "openai"
+      offline:
+        type: boolean
+        description: "Rule-based mode (no LLM needed)"
+        default: false
+  commandFunction: |
+    (config) => ({
+      command: 'python',
+      args: ['-m', 'causal_copilot.mcp'],
+      env: {
+        OPENAI_API_KEY: config.openaiApiKey || '',
+        LLM_PROVIDER: config.llmProvider || 'openai',
+      }
+    })

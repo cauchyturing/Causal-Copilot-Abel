@@ -1,0 +1,30 @@
+# Dockerfile.mcp-full — Full MCP server (~4GB)
+# All algorithms including torch-based + LaTeX reports.
+FROM pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime AS base
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential graphviz git \
+    texlive-latex-base texlive-latex-extra texlive-fonts-recommended && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY requirements_cpu.txt .
+RUN pip install --no-cache-dir -r requirements_cpu.txt
+RUN pip install --no-cache-dir "fastmcp>=3.0"
+
+# Application
+COPY . .
+ENV PYTHONPATH=/app:/app/externals:/app/externals/causal-learn
+
+# Non-root user
+RUN useradd -m mcp && chown -R mcp:mcp /app
+USER mcp
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 0
+
+EXPOSE 8000
+ENTRYPOINT ["python", "-m", "causal_copilot.mcp", "--http"]

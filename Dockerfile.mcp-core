@@ -1,0 +1,29 @@
+# Dockerfile.mcp-core — Lightweight MCP server (~800MB)
+# No torch, no LaTeX. Algorithms that don't need torch.
+FROM python:3.12-slim AS base
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential graphviz git && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python deps (core only, no torch)
+COPY requirements_mcp_core.txt .
+RUN pip install --no-cache-dir -r requirements_mcp_core.txt
+
+# Application
+COPY . .
+ENV PYTHONPATH=/app:/app/externals:/app/externals/causal-learn
+
+# Non-root user
+RUN useradd -m mcp && chown -R mcp:mcp /app
+USER mcp
+
+# Health check (only for HTTP mode)
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 0
+
+EXPOSE 8000
+ENTRYPOINT ["python", "-m", "causal_copilot.mcp", "--http"]

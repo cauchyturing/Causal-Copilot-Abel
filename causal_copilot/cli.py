@@ -332,6 +332,9 @@ def main(argv=None):
     p_quick = sub.add_parser("quickstart", help="Run demo analysis on synthetic data")
     p_quick.add_argument("--output", "-o", help="Output JSON file path")
 
+    # mcp
+    sub.add_parser("mcp", help="Start MCP server (causal discovery as an agent skill)")
+
     args = parser.parse_args(argv)
 
     if args.command == "doctor":
@@ -350,6 +353,13 @@ def main(argv=None):
         cmd_benchmark(args)
     elif args.command == "quickstart":
         cmd_quickstart(args)
+    elif args.command == "mcp":
+        try:
+            from causal_copilot.mcp.server import mcp as mcp_server
+        except ImportError:
+            print("Error: MCP server requires: pip install causal-copilot[mcp]", file=sys.stderr)
+            sys.exit(1)
+        mcp_server.run()
     else:
         parser.print_help()
         sys.exit(1)

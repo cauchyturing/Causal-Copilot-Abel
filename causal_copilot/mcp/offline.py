@@ -10,7 +10,7 @@ def select_algorithm_offline(statistics) -> str:
     """Pick a sensible algorithm based on dataset statistics alone.
 
     Decision tree (simplified):
-      time-series → PCMCI+
+      time-series → PCMCI
       non-Gaussian errors → DirectLiNGAM
       non-linear → GES (robust default)
       linear + Gaussian + missing → PC (mvpc mode)
@@ -19,7 +19,7 @@ def select_algorithm_offline(statistics) -> str:
     """
     ts = getattr(statistics, "time_series", False)
     if ts:
-        return "PCMCI+"
+        return "PCMCI"
 
     gaussian = getattr(statistics, "gaussian_error", True)
     linear = getattr(statistics, "linearity", True)
@@ -41,7 +41,7 @@ def get_default_hp(algorithm: str, statistics) -> dict:
         "PC": {"alpha": 0.05, "indep_test": "fisherz", "stable": True},
         "GES": {"score_func": "local_score_BIC"},
         "DirectLiNGAM": {"measure": "pwling"},
-        "PCMCI+": {"tau_max": 3, "pc_alpha": 0.05},
+        "PCMCI": {"tau_max": 3, "pc_alpha": 0.05},
         "FCI": {"alpha": 0.05, "indep_test": "fisherz"},
     }
 

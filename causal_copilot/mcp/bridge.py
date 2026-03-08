@@ -100,6 +100,16 @@ def adj_to_edges(adj, node_names):
                     "to": node_names[j],
                     "type": "bidirected",
                 })
+            elif v in (4, 5, 6, 7) and i < j:  # PAG edge types, emit once
+                # 4=circle-tail, 5=circle-arrow, 6=tail-tail, 7=arrow-arrow
+                pag_labels = {4: "circle-tail", 5: "circle-arrow",
+                              6: "tail-tail", 7: "arrow-arrow"}
+                edges.append({
+                    "from": node_names[i],
+                    "to": node_names[j],
+                    "type": "pag",
+                    "pag_detail": pag_labels.get(v, f"pag-{v}"),
+                })
 
     return edges
 

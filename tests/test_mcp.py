@@ -166,10 +166,60 @@ class _MockWrapper:
         return np.zeros((n, n)), {"mock": True}, None
 
 
-class _mock_run_algorithm:
-    """Context manager that patches wrappers so Programming.forward works."""
+def _mock_stat_info(gs):
+    """Mock stat_info_collection that sets plausible statistics."""
+    gs.statistics.linearity = True
+    gs.statistics.gaussian_error = True
+    gs.statistics.missingness = False
+    gs.statistics.data_type = "Continuous"
+    gs.statistics.sample_size = gs.user_data.raw_data.shape[0]
+    gs.statistics.feature_number = gs.user_data.raw_data.shape[1]
+    gs.statistics.time_series = False
+    return gs
+
+
+def _inject_fake_stat_module():
+    """Inject fake preprocess.stat_info_functions into sys.modules.
+
+    Returns (had_module, old_module) for cleanup.
+    """
+    import sys
+    from types import ModuleType
+
+    had = "preprocess.stat_info_functions" in sys.modules
+    old = sys.modules.get("preprocess.stat_info_functions")
+    fake = ModuleType("preprocess.stat_info_functions")
+    fake.stat_info_collection = _mock_stat_info
+    sys.modules["preprocess.stat_info_functions"] = fake
+    return had, old
+
+
+def _restore_stat_module(had, old):
+    """Restore preprocess.stat_info_functions after mock."""
+    import sys
+
+    if had and old is not None:
+        sys.modules["preprocess.stat_info_functions"] = old
+    elif not had:
+        sys.modules.pop("preprocess.stat_info_functions", None)
+
+
+class _mock_stat_info_ctx:
+    """Context manager that injects a fake stat module for diagnose_data tests."""
 
     def __enter__(self):
+        self._had, self._old = _inject_fake_stat_module()
+        return self
+
+    def __exit__(self, *args):
+        _restore_stat_module(self._had, self._old)
+
+
+class _mock_run_algorithm:
+    """Context manager that patches wrappers + stat_info so pipeline tools work."""
+
+    def __enter__(self):
+        self._had, self._old = _inject_fake_stat_module()
         self._patcher = patch(
             "causal_discovery.wrappers.PC",
             _MockWrapper,
@@ -179,6 +229,7 @@ class _mock_run_algorithm:
 
     def __exit__(self, *args):
         self._patcher.stop()
+        _restore_stat_module(self._had, self._old)
 
 
 class TestDiagnoseDataTool:
@@ -190,7 +241,8 @@ class TestDiagnoseDataTool:
         for _ in range(60):
             lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
         csv = "\n".join(lines)
-        result = json.loads(diagnose_data(csv))
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(csv))
         assert result["status"] == "ok"
         assert "linearity" in result["diagnosis"]
         assert "data_type" in result["diagnosis"]
@@ -333,19 +385,24 @@ class TestEstimateEffectsTool:
         assert result["status"] == "error"
         assert "Z" in result["error"]
 
-    def test_cpdag_numeric_allows_ida(self):
+    def test_cpdag_linear_gaussian_allows_ida(self):
         from causal_copilot.mcp.server import estimate_effects
+        from causal_discovery.pdag_policy import check_inference_policy
 
-        # CPDAG (undirected edges) with numeric data -> IDA
-        adj = [[0, 2], [2, 0]]
-        names = ["X", "Y"]
-        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
-        result = json.loads(estimate_effects(
-            json.dumps(adj), json.dumps(names), csv,
-            treatment="X", outcome="Y",
-        ))
-        assert result["status"] == "ok"
-        assert result["inference_method"] == "ida"
+        # Test PDAG policy directly: CPDAG + linear-Gaussian -> IDA allowed
+        adj = np.array([[0, 2], [2, 0]])
+        policy = check_inference_policy(adj, is_linear_gaussian=True)
+        assert policy["allow_inference"] is True
+        assert policy["method"] == "ida"
+
+    def test_cpdag_nonlinear_rejects(self):
+        from causal_copilot.mcp.server import estimate_effects
+        from causal_discovery.pdag_policy import check_inference_policy
+
+        # Test PDAG policy directly: CPDAG + non-linear -> reject
+        adj = np.array([[0, 2], [2, 0]])
+        policy = check_inference_policy(adj, is_linear_gaussian=False)
+        assert policy["allow_inference"] is False
 
 
 class TestDiscoverTool:

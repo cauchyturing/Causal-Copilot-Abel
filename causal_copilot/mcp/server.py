@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 from contextlib import contextmanager
 from typing import Any
 
@@ -58,15 +59,23 @@ class _NumpyEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+_pipeline_lock = threading.Lock()
+
+
 @contextmanager
 def _pipeline_cwd():
-    """Temporarily set CWD to pipeline root (legacy code assumes it)."""
-    prev = os.getcwd()
-    os.chdir(PIPELINE_ROOT)
-    try:
-        yield
-    finally:
-        os.chdir(prev)
+    """Temporarily set CWD to pipeline root (legacy code assumes it).
+
+    Uses a process-level lock to prevent concurrent CWD changes
+    from racing in FastMCP's threadpool.
+    """
+    with _pipeline_lock:
+        prev = os.getcwd()
+        os.chdir(PIPELINE_ROOT)
+        try:
+            yield
+        finally:
+            os.chdir(prev)
 
 
 def _adj_to_edges(adj: np.ndarray, columns: list[str]) -> list[dict[str, str]]:
@@ -688,8 +697,20 @@ def estimate_effects(
     except Exception as e:
         return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
 
-    # Heuristic: treat as linear-Gaussian if all columns are numeric
-    is_linear_gaussian = all(np.issubdtype(dt, np.number) for dt in df.dtypes)
+    # Determine linear-Gaussian using actual diagnostics when possible
+    is_linear_gaussian = False
+    try:
+        with _pipeline_cwd():
+            from preprocess.stat_info_functions import stat_info_collection
+            gs = make_global_state(df)
+            gs = stat_info_collection(gs)
+            is_linear_gaussian = (
+                getattr(gs.statistics, "linearity", False)
+                and getattr(gs.statistics, "gaussian_error", False)
+            )
+    except Exception:
+        # Fallback: conservative — treat as non-linear-Gaussian
+        is_linear_gaussian = False
 
     policy = check_inference_policy(adj, is_linear_gaussian=is_linear_gaussian)
 
@@ -889,3 +910,62 @@ def discover(
         if warnings:
             payload["warnings"] = warnings
         return json.dumps(payload)
+
+
+# ── MCP Resources ─────────────────────────────────────────────────────
+from causal_copilot.mcp.resources import (
+    get_algorithm_resources,
+    get_algorithm_content,
+    get_hp_content,
+    get_guide_content,
+    get_all_guide_names,
+)
+
+
+@mcp.resource("causal://algorithms")
+def algorithms_index():
+    """List all available causal discovery algorithms."""
+    return json.dumps(get_algorithm_resources(), indent=2)
+
+
+@mcp.resource("causal://algorithms/{name}")
+def algorithm_profile(name: str):
+    """Get detailed profile for a specific algorithm."""
+    content = get_algorithm_content(name)
+    if content is None:
+        return json.dumps({"error": f"Algorithm '{name}' not found"})
+    return content
+
+
+@mcp.resource("causal://hyperparameters/{name}")
+def hp_spec(name: str):
+    """Get hyperparameter specification for an algorithm."""
+    content = get_hp_content(name)
+    if content is None:
+        return json.dumps({"error": f"HP spec for '{name}' not found"})
+    return content
+
+
+@mcp.resource("causal://guides/{guide_name}")
+def guide(guide_name: str):
+    """Get a methodology guide document."""
+    content = get_guide_content(guide_name)
+    if content is None:
+        return json.dumps({"error": f"Guide '{guide_name}' not found"})
+    return content
+
+
+# ── MCP Prompts ───────────────────────────────────────────────────────
+from causal_copilot.mcp.prompts import PROMPTS
+
+
+@mcp.prompt()
+def causal_expert():
+    """Expert system prompt for causal discovery."""
+    return PROMPTS["causal-expert"]
+
+
+@mcp.prompt()
+def analyze_dataset():
+    """Step-by-step workflow for analyzing a dataset."""
+    return PROMPTS["analyze-dataset"]

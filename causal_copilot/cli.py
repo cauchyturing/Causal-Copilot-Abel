@@ -184,12 +184,19 @@ def cmd_agent_analyze(args):
         print(f"Error initializing agent: {e}", file=sys.stderr)
         sys.exit(1)
 
-    result = agent.analyze(
-        args.data,
-        query=args.query or "",
-        timeout=args.timeout,
-        seed=args.seed,
-    )
+    try:
+        result = agent.analyze(
+            args.data,
+            query=args.query or "",
+            timeout=args.timeout,
+            seed=args.seed,
+        )
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error during analysis: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if args.output:
         out_path = Path(args.output)

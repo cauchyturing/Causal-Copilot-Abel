@@ -107,6 +107,12 @@ class TestAgentLLM:
         llm = AgentLLM(provider="openai", model="gpt-4o")
         assert llm.model == "gpt-4o"
 
+    def test_init_unknown_provider_raises(self):
+        from causal_copilot.agent.llm import AgentLLM
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            AgentLLM(provider="openruter")
+
 
 # ---------------------------------------------------------------------------
 # Mock LLM for selector/pipeline tests

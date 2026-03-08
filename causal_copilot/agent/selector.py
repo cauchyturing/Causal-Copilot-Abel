@@ -168,6 +168,16 @@ Only include parameters you want to change from defaults."""
     except Exception:
         return {}  # LLM failure -> use defaults
 
-    # Filter to only valid parameter names
-    valid_params = {k: v for k, v in result.items() if k in hp_spec and k != "algorithm_name"}
+    # Filter to valid parameter names and validate values against spec
+    valid_params = {}
+    for k, v in result.items():
+        if k not in hp_spec or k == "algorithm_name":
+            continue
+        spec_entry = hp_spec[k]
+        # If spec has available_values, enforce membership
+        if isinstance(spec_entry, dict) and "available_values" in spec_entry:
+            allowed = spec_entry["available_values"]
+            if isinstance(allowed, list) and v not in allowed:
+                continue  # LLM picked an invalid value — skip it
+        valid_params[k] = v
     return valid_params

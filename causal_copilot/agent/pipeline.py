@@ -104,7 +104,7 @@ class AgentCopilot:
             result.provenance = replace(
                 result.provenance,
                 planner="llm" if agent_decision.source == "llm" else "rule",
-                planner_model=self.llm.model,
+                planner_model=self.llm.model if agent_decision.source == "llm" else None,
             )
         result.algorithm_selection_reason = agent_decision.reasoning
 

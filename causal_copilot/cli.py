@@ -99,6 +99,48 @@ def cmd_analyze(args):
     sys.exit(0 if result.status == "ok" else 1)
 
 
+def cmd_benchmark(args):
+    """Run benchmark evaluation."""
+    from benchmarks.runner import run_benchmark
+    from benchmarks.scenarios import ALL_SCENARIOS
+    from causal_copilot.algorithms.registry import REGISTRY
+
+    algorithms = [args.algorithm] if args.algorithm else list(REGISTRY.keys())
+    scenarios = [args.scenario] if args.scenario else list(ALL_SCENARIOS.keys())
+
+    results = []
+    for algo in algorithms:
+        for scenario in scenarios:
+            print(f"Running {algo} on {scenario}...", end=" ", flush=True)
+            r = run_benchmark(algo, scenario, seed=args.seed, timeout=args.timeout)
+            results.append(r.to_dict())
+            if r.status == "skipped":
+                print(f"SKIPPED ({r.error})")
+            elif r.status == "failed":
+                print(f"FAILED ({r.error})")
+            else:
+                m = r.metrics
+                label = f"[{r.output_type}] " if r.output_type != "dag" else ""
+                print(f"{label}SHD={m.shd} Skel-F1={m.skeleton_f1:.3f} F1={m.f1:.3f} ({r.runtime_seconds:.1f}s)")
+
+    if args.output:
+        Path(args.output).write_text(json.dumps(results, indent=2))
+        print(f"\nResults written to {args.output}")
+
+    # Summary table — primary metric depends on output type
+    print(f"\n{'Algorithm':<20} {'Type':<6} {'Scenario':<15} {'SHD':>5} {'Skel-F1':>8} {'F1*':>6} {'Orient':>7}")
+    print("-" * 72)
+    print("  * F1 = directed; only meaningful for DAG outputs, not CPDAG/PAG")
+    print()
+    for r in results:
+        if r.get("status") != "ok":
+            status = r.get("status", "?").upper()
+            print(f"{r['algorithm']:<20} {r.get('output_type','?'):<6} {r['scenario']:<15} {status:>5}")
+        else:
+            m = r["metrics"]
+            print(f"{r['algorithm']:<20} {r['output_type']:<6} {r['scenario']:<15} {m['shd']:>5} {m['skeleton_f1']:>8.3f} {m['f1']:>6.3f} {m['orientation_accuracy']:>7.3f}")
+
+
 def cmd_quickstart(args):
     """Run a demo analysis on bundled synthetic data."""
     import numpy as np
@@ -170,6 +212,14 @@ def main(argv=None):
     p_analyze.add_argument("--timeout", "-t", type=int, default=300, help="Timeout in seconds (default: 300)")
     p_analyze.add_argument("--seed", "-s", type=int, default=42, help="Random seed (default: 42)")
 
+    # benchmark
+    p_bench = sub.add_parser("benchmark", help="Run benchmark evaluation")
+    p_bench.add_argument("--algorithm", "-a", help="Run specific algorithm (default: all)")
+    p_bench.add_argument("--scenario", help="Run specific scenario (default: all synthetic)")
+    p_bench.add_argument("--output", "-o", help="Output JSON file")
+    p_bench.add_argument("--timeout", "-t", type=int, default=120, help="Timeout per run (default: 120)")
+    p_bench.add_argument("--seed", "-s", type=int, default=42, help="Random seed")
+
     # quickstart
     p_quick = sub.add_parser("quickstart", help="Run demo analysis on synthetic data")
     p_quick.add_argument("--output", "-o", help="Output JSON file path")
@@ -182,6 +232,8 @@ def main(argv=None):
         cmd_version(args)
     elif args.command == "analyze":
         cmd_analyze(args)
+    elif args.command == "benchmark":
+        cmd_benchmark(args)
     elif args.command == "quickstart":
         cmd_quickstart(args)
     else:

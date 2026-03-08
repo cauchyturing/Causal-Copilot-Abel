@@ -109,6 +109,27 @@ class TestQuickstart:
         assert data["status"] == "ok"
 
 
+class TestBenchmarkCLI:
+    def test_benchmark_help(self, capsys):
+        """Benchmark subcommand should exist."""
+        with pytest.raises(SystemExit):
+            main(["benchmark", "--help"])
+        out = capsys.readouterr().out
+        assert "benchmark" in out.lower() or "algorithm" in out.lower()
+
+    @pytest.mark.slow
+    def test_benchmark_single(self, tmp_path):
+        """Run benchmark on one algo + one scenario."""
+        out_file = tmp_path / "result.json"
+        main(["benchmark", "--algorithm", "PC", "--scenario", "linear_chain",
+              "--output", str(out_file)])
+        assert out_file.exists()
+        data = json.loads(out_file.read_text())
+        assert len(data) == 1
+        assert data[0]["algorithm"] == "PC"
+        assert "metrics" in data[0]
+
+
 class TestNoCommand:
     def test_no_command_exits(self):
         with pytest.raises(SystemExit) as exc_info:

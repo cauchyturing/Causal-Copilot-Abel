@@ -232,3 +232,85 @@ class TestStandardDatasets:
         ds1 = STANDARD_DATASETS["sachs"]
         ds2 = STANDARD_DATASETS["sachs"]
         np.testing.assert_array_equal(ds1.data.values, ds2.data.values)
+
+
+# ---------------------------------------------------------------------------
+# Algorithm capability matrix
+# ---------------------------------------------------------------------------
+
+from benchmarks.capability import CAPABILITY_MATRIX, AlgorithmCapability
+
+
+class TestCapabilityMatrix:
+    def test_has_all_registered_algorithms(self):
+        from causal_copilot.algorithms.registry import REGISTRY
+        for name in REGISTRY:
+            assert name in CAPABILITY_MATRIX, f"Missing capability entry for {name}"
+
+    def test_capability_fields(self):
+        for name, cap in CAPABILITY_MATRIX.items():
+            assert isinstance(cap, AlgorithmCapability)
+            assert cap.name == name
+            assert cap.output_type in ("dag", "cpdag", "pag")
+            assert isinstance(cap.handles_latent_confounders, bool)
+            assert isinstance(cap.handles_nonlinear, bool)
+            assert isinstance(cap.handles_non_gaussian, bool)
+            assert isinstance(cap.handles_time_series, bool)
+            assert isinstance(cap.assumptions, list)
+            assert len(cap.assumptions) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Benchmark runner
+# ---------------------------------------------------------------------------
+
+from benchmarks.runner import run_benchmark, BenchmarkResult
+
+
+@pytest.mark.slow
+class TestBenchmarkRunner:
+    def test_run_single_benchmark(self):
+        """Run PC on linear_chain scenario."""
+        result = run_benchmark(algorithm="PC", scenario_name="linear_chain", seed=42)
+        assert isinstance(result, BenchmarkResult)
+        assert result.algorithm == "PC"
+        assert result.scenario == "linear_chain"
+        assert result.status == "ok"
+        assert result.output_type == "cpdag"
+        assert result.metrics is not None
+        assert result.provenance is not None
+        assert result.provenance.seed == 42
+
+    def test_result_to_dict(self):
+        result = run_benchmark(algorithm="PC", scenario_name="linear_chain", seed=42)
+        d = result.to_dict()
+        assert "algorithm" in d
+        assert "metrics" in d
+        assert "provenance" in d
+        assert "output_type" in d
+        assert "status" in d
+        assert "adjacency_matrix" in d
+
+    def test_run_benchmark_deterministic(self):
+        r1 = run_benchmark(algorithm="PC", scenario_name="linear_chain", seed=42)
+        r2 = run_benchmark(algorithm="PC", scenario_name="linear_chain", seed=42)
+        assert r1.metrics.shd == r2.metrics.shd
+        assert r1.metrics.f1 == r2.metrics.f1
+
+
+class TestBenchmarkCompatibility:
+    def test_time_series_algo_skipped_on_iid(self):
+        """PCMCI/Granger should be skipped on IID scenarios."""
+        result = run_benchmark(algorithm="PCMCI", scenario_name="linear_chain")
+        assert result.status == "skipped"
+        assert result.metrics is None
+        assert "time-series" in result.error.lower()
+
+    def test_granger_skipped_on_iid(self):
+        result = run_benchmark(algorithm="GrangerCausality", scenario_name="linear_chain")
+        assert result.status == "skipped"
+        assert result.metrics is None
+
+    def test_unknown_scenario_raises(self):
+        with pytest.raises(ValueError, match="Unknown"):
+            run_benchmark(algorithm="PC", scenario_name="nonexistent")

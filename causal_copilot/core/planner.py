@@ -30,9 +30,9 @@ def detect_data_properties(data: pd.DataFrame) -> dict[str, Any]:
     # Check linearity heuristic: correlation between feature pairs
     numeric_data = data.select_dtypes(include=[np.number])
     if numeric_data.shape[1] >= 2:
-        corr = numeric_data.corr().abs()
-        np.fill_diagonal(corr.values, 0)
-        avg_corr = corr.mean().mean()
+        corr = numeric_data.corr().abs().to_numpy(copy=True)
+        np.fill_diagonal(corr, 0)
+        avg_corr = float(corr.mean())
         likely_linear = avg_corr > 0.3  # heuristic
     else:
         likely_linear = True

@@ -51,6 +51,31 @@ def cmd_doctor(args):
         detail = f"missing: {', '.join(missing)}" if missing else "all installed"
         print(f"  {status} [{group}] {detail}")
 
+    # Agent
+    print("\nAgent:")
+    try:
+        from causal_copilot.agent.llm import PROVIDERS
+
+        print("  + agent module available")
+        for name in PROVIDERS:
+            print(f"    {name}: {PROVIDERS[name]['base_url']}")
+    except ImportError:
+        print("  x agent not installed (pip install causal-copilot[agent])")
+
+    if getattr(args, "llm", False):
+        print("\nLLM Connectivity:")
+        try:
+            from causal_copilot.agent.llm import AgentLLM
+            import os
+
+            provider = os.getenv("LLM_PROVIDER", "openai")
+            llm = AgentLLM(provider=provider)
+            llm._client = llm._client.with_options(timeout=10.0, max_retries=0)
+            response = llm.complete("Say 'ok' and nothing else.")
+            print(f"  + {provider} ({llm.model}): connected")
+        except Exception as e:
+            print(f"  x connection failed: {e}")
+
     print("\nPlatform:")
     import platform
 
@@ -141,6 +166,57 @@ def cmd_benchmark(args):
             print(f"{r['algorithm']:<20} {r['output_type']:<6} {r['scenario']:<15} {m['shd']:>5} {m['skeleton_f1']:>8.3f} {m['f1']:>6.3f} {m['orientation_accuracy']:>7.3f}")
 
 
+def cmd_agent_analyze(args):
+    """Run LLM-driven autonomous causal analysis."""
+    try:
+        from causal_copilot.agent import AgentCopilot
+    except ImportError:
+        print("Error: Agent mode requires: pip install causal-copilot[agent]", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        agent = AgentCopilot(
+            provider=args.provider,
+            model=args.model,
+            api_key=args.api_key,
+        )
+    except Exception as e:
+        print(f"Error initializing agent: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    result = agent.analyze(
+        args.data,
+        query=args.query or "",
+        timeout=args.timeout,
+        seed=args.seed,
+    )
+
+    if args.output:
+        out_path = Path(args.output)
+        out_path.write_text(json.dumps(result.to_dict(), indent=2))
+        print(f"Result written to {out_path}")
+    else:
+        print(result.summary)
+        interp = result.discovery_metadata.get("agent_interpretation")
+        if interp:
+            print(f"\nInterpretation: {interp}")
+        if result.algorithm_selection_reason:
+            print(f"\nAlgorithm selection: {result.algorithm_selection_reason}")
+        if result.warnings:
+            print(f"\nWarnings ({len(result.warnings)}):")
+            for w in result.warnings:
+                print(f"  - {w}")
+        if result.provenance:
+            p = result.provenance
+            print(
+                f"\nProvenance: {p.algorithm} | planner={p.planner}"
+                f" | model={p.planner_model} | seed={p.seed}"
+                f" | {p.runtime_seconds:.1f}s"
+            )
+
+    sys.exit(0 if result.status == "ok" else 1)
+
+
 def cmd_quickstart(args):
     """Run a demo analysis on bundled synthetic data."""
     import numpy as np
@@ -200,7 +276,8 @@ def main(argv=None):
     )
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("doctor", help="Check environment and dependencies")
+    p_doctor = sub.add_parser("doctor", help="Check environment and dependencies")
+    p_doctor.add_argument("--llm", action="store_true", help="Test LLM connectivity")
     sub.add_parser("version", help="Show version")
 
     # analyze
@@ -220,6 +297,21 @@ def main(argv=None):
     p_bench.add_argument("--timeout", "-t", type=int, default=120, help="Timeout per run (default: 120)")
     p_bench.add_argument("--seed", "-s", type=int, default=42, help="Random seed")
 
+    # agent
+    p_agent = sub.add_parser("agent", help="LLM-driven autonomous analysis")
+    agent_sub = p_agent.add_subparsers(dest="agent_command")
+    p_agent_analyze = agent_sub.add_parser("analyze", help="Run agent analysis on CSV")
+    p_agent_analyze.add_argument("data", help="Path to CSV file")
+    p_agent_analyze.add_argument("--query", "-q", default="", help="Causal question")
+    p_agent_analyze.add_argument("--output", "-o", help="Output JSON file path")
+    p_agent_analyze.add_argument(
+        "--provider", default="openai", help="LLM provider: openai, openrouter, ollama, lmstudio"
+    )
+    p_agent_analyze.add_argument("--model", "-m", default=None, help="Override model name")
+    p_agent_analyze.add_argument("--api-key", default=None, help="API key (or set env var)")
+    p_agent_analyze.add_argument("--timeout", "-t", type=int, default=300, help="Timeout (s)")
+    p_agent_analyze.add_argument("--seed", "-s", type=int, default=42, help="Random seed")
+
     # quickstart
     p_quick = sub.add_parser("quickstart", help="Run demo analysis on synthetic data")
     p_quick.add_argument("--output", "-o", help="Output JSON file path")
@@ -232,6 +324,12 @@ def main(argv=None):
         cmd_version(args)
     elif args.command == "analyze":
         cmd_analyze(args)
+    elif args.command == "agent":
+        if getattr(args, "agent_command", None) == "analyze":
+            cmd_agent_analyze(args)
+        else:
+            p_agent.print_help()
+            sys.exit(1)
     elif args.command == "benchmark":
         cmd_benchmark(args)
     elif args.command == "quickstart":

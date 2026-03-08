@@ -130,6 +130,58 @@ class TestBenchmarkCLI:
         assert "metrics" in data[0]
 
 
+class TestDoctorLLM:
+    def test_doctor_shows_agent_section(self, capsys):
+        main(["doctor"])
+        out = capsys.readouterr().out
+        assert "Agent" in out
+
+    def test_doctor_llm_flag_exists(self, capsys):
+        """--llm flag should be accepted (even without valid key)."""
+        main(["doctor", "--llm"])
+        out = capsys.readouterr().out
+        assert "LLM" in out
+
+
+class TestAgentCLI:
+    def test_agent_help(self, capsys):
+        """Agent subcommand should exist."""
+        with pytest.raises(SystemExit):
+            main(["agent", "--help"])
+        out = capsys.readouterr().out
+        assert "analyze" in out.lower()
+
+    def test_agent_analyze_with_mock(self, tmp_path, capsys):
+        """Agent analyze with mocked LLM should complete."""
+        from causal_copilot.agent.pipeline import AgentCopilot
+        from causal_copilot.agent.selector import AgentDecision
+
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame({"a": rng.normal(size=50), "b": rng.normal(size=50)})
+        csv_path = tmp_path / "test.csv"
+        df.to_csv(csv_path, index=False)
+
+        mock_decision = AgentDecision(
+            algorithm="PC", hyperparams={}, reasoning="Mock", source="llm"
+        )
+        with (
+            _mock_algorithm(),
+            patch(
+                "causal_copilot.agent.selector.select_algorithm",
+                return_value=mock_decision,
+            ),
+            patch(
+                "causal_copilot.agent.selector.tune_hyperparameters",
+                return_value={},
+            ),
+            patch.object(AgentCopilot, "_interpret_result", return_value=None),
+            pytest.raises(SystemExit, match="0"),
+        ):
+            main(["agent", "analyze", str(csv_path), "--provider", "ollama"])
+        out = capsys.readouterr().out
+        assert "discovered" in out.lower() or "directed" in out.lower()
+
+
 class TestNoCommand:
     def test_no_command_exits(self):
         with pytest.raises(SystemExit) as exc_info:

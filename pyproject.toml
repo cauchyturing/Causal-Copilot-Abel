@@ -69,6 +69,7 @@ algorithms = [
     "tigramite>=5.2",
     "gcastle>=1.0",
     "causalnex>=0.12",
+    "xges>=0.1",
 ]
 # Visualization
 viz = [

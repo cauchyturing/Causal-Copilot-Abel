@@ -391,7 +391,7 @@ Causal-Copilot produces **exploratory** causal graphs, not confirmatory evidence
 **What it does well:**
 - Automated algorithm selection and hyperparameter tuning for tabular data
 - Reproducible results with full provenance tracking (seed, params, environment)
-- 5 algorithms via Python API (PC, GES, NOTEARSLinear, DirectLiNGAM, PCMCI), 20+ via full pipeline
+- 19 algorithms via pip package (5 families: constraint, score, functional, hybrid, time-series), 27+ via full source
 
 **What it does NOT do:**
 - Prove causation from observational data alone
@@ -405,10 +405,10 @@ Always validate discovered edges against domain knowledge before making decision
 | | Core | Agent |
 |---|---|---|
 | **Install** | `pip install causal-copilot` | `pip install causal-copilot[agent]` |
-| **Algorithms** | 7 (PC, GES, FCI, NOTEARSLinear, DirectLiNGAM, ICALiNGAM, PCMCI) | 39 (full legacy set) |
+| **Algorithms** | 19 (constraint, score, functional, hybrid, time-series) | 19 + LLM-driven selection |
 | **LLM required** | No — offline, deterministic | Yes — LLM selects algorithm, tunes hyperparameters |
-| **Directory** | `causal_copilot/` | `agent/` (wraps `causal_discovery/` legacy tree) |
-| **Stability** | Stable, tested, pip-installable | Experimental — used for paper evaluation |
+| **Directory** | `causal_copilot/core/` + `causal_copilot/algorithms/` | `causal_copilot/agent/` (wraps core) |
+| **Stability** | Stable, tested, pip-installable | Stable with graceful fallback to rule-based |
 
 The core **never** imports from the agent. This boundary is enforced by CI.
 

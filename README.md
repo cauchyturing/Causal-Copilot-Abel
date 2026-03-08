@@ -376,6 +376,18 @@ Causal-Copilot produces **exploratory** causal graphs, not confirmatory evidence
 
 Always validate discovered edges against domain knowledge before making decisions.
 
+### Two Surfaces
+
+| | Core | Agent |
+|---|---|---|
+| **Install** | `pip install causal-copilot` | `pip install causal-copilot[agent]` |
+| **Algorithms** | 7 (PC, GES, FCI, NOTEARSLinear, DirectLiNGAM, ICALiNGAM, PCMCI) | 39 (full legacy set) |
+| **LLM required** | No — offline, deterministic | Yes — LLM selects algorithm, tunes hyperparameters |
+| **Directory** | `causal_copilot/` | `agent/` (wraps `causal_discovery/` legacy tree) |
+| **Stability** | Stable, tested, pip-installable | Experimental — used for paper evaluation |
+
+The core **never** imports from the agent. This boundary is enforced by CI.
+
 ---
 
 If you use Causal-Copilot in your research, please cite it as follows:

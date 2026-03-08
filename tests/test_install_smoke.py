@@ -34,6 +34,32 @@ class TestNoRepoRootDependency:
         assert "importlib.util" not in source
 
 
+class TestCoreAgentBoundary:
+    def test_core_does_not_import_agent(self):
+        """causal_copilot/ must never import from agent/."""
+        import ast
+        from pathlib import Path
+
+        core_dir = Path(__file__).parent.parent / "causal_copilot"
+        for py_file in core_dir.rglob("*.py"):
+            source = py_file.read_text()
+            try:
+                tree = ast.parse(source)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        assert not alias.name.startswith("agent"), (
+                            f"{py_file.name} imports from agent: {alias.name}"
+                        )
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module and node.module.startswith("agent"):
+                        raise AssertionError(
+                            f"{py_file.name} imports from agent: {node.module}"
+                        )
+
+
 class TestAnalyzeWithoutRepoRoot:
     def test_analyze_synthetic_data(self):
         from causal_copilot import CausalCopilot

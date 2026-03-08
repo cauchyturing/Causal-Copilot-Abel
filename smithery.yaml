@@ -1,5 +1,9 @@
-# smithery.yaml — MCP registry listing
-# https://smithery.ai — enables one-click install in Claude Desktop, Cursor, etc.
+# smithery.yaml — MCP registry listing for Causal-Copilot
+# https://smithery.ai — enables one-click install via:
+#   npx @smithery/cli install causal-copilot
+#
+# 4 tools: discover, inspect_graph, diagnose_data, run_algorithm
+# Works without LLM key (offline rule-based fallback).
 startCommand:
   type: stdio
   configSchema:
@@ -7,18 +11,18 @@ startCommand:
     properties:
       openaiApiKey:
         type: string
-        description: "OpenAI API key (when llmProvider=openai)"
+        description: "OpenAI API key (for full LLM pipeline). Optional — falls back to rule-based mode."
       openrouterApiKey:
         type: string
-        description: "OpenRouter API key (when llmProvider=openrouter)"
+        description: "OpenRouter API key (alternative to OpenAI). Optional."
       llmProvider:
         type: string
-        description: "LLM provider: openai, openrouter, ollama"
+        description: "LLM provider: openai, openrouter, ollama, lmstudio"
         default: "openai"
-      offline:
-        type: boolean
-        description: "Rule-based mode (no LLM needed)"
-        default: false
+      llmModel:
+        type: string
+        description: "LLM model name (e.g. gpt-4o, deepseek/deepseek-chat)"
+        default: ""
   commandFunction: |
     (config) => ({
       command: 'python',
@@ -27,5 +31,7 @@ startCommand:
         OPENAI_API_KEY: config.openaiApiKey || '',
         OPENROUTER_API_KEY: config.openrouterApiKey || '',
         LLM_PROVIDER: config.llmProvider || 'openai',
+        LLM_MODEL: config.llmModel || '',
+        PYTHONPATH: [process.cwd(), process.cwd() + '/externals', process.cwd() + '/externals/causal-learn'].join(':'),
       }
     })

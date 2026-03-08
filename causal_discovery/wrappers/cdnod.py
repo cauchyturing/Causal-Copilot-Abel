@@ -24,8 +24,12 @@ from causal_discovery.wrappers.base import CausalDiscoveryAlgorithm
 from causal_discovery.wrappers.pc import PC
 from causal_discovery.evaluation.evaluator import GraphEvaluator
 
-import torch
-cuda_available = torch.cuda.is_available()
+try:
+    import torch
+    cuda_available = torch.cuda.is_available()
+except ImportError:
+    torch = None
+    cuda_available = False
 try:
     from externals.acceleration.cdnod.cdnod import accelerated_cdnod
 except ImportError:

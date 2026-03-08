@@ -1,10 +1,11 @@
 # Dockerfile.mcp-core — Lightweight MCP server (~800MB)
-# No torch, no LaTeX. Algorithms that don't need torch.
+# No torch, no LaTeX. PC, GES, FCI, DirectLiNGAM, etc. work.
+# LLM pipeline falls back to rule-based offline mode.
 FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# System deps
+# System deps (graphviz needed by causal-learn graph rendering)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential graphviz git && \
     rm -rf /var/lib/apt/lists/*
@@ -21,8 +22,9 @@ ENV PYTHONPATH=/app:/app/externals:/app/externals/causal-learn
 RUN useradd -m mcp && chown -R mcp:mcp /app
 USER mcp
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+# Healthcheck with startup grace period
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 EXPOSE 8000
 ENTRYPOINT ["python", "-m", "causal_copilot.mcp", "--http"]

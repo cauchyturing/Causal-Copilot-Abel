@@ -1,5 +1,8 @@
 import json
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 import causal_discovery.wrappers as wrappers
 from llm import LLMClient
 from utils.logger import logger
@@ -97,7 +100,7 @@ class HyperparameterSelector:
         hp_prompt = hp_prompt.replace("[COLUMNS]", table_columns)
         hp_prompt = hp_prompt.replace("[KNOWLEDGE_INFO]", knowledge_info)
         hp_prompt = hp_prompt.replace("[STATISTICS INFO]", global_state.statistics.description)
-        hp_prompt = hp_prompt.replace("[CUDA_WARNING]", "Current machine supports CUDA, some algorithms can be accelerated by GPU if needed." if torch.cuda.is_available() else "\nCurrent machine doesn't support CUDA, do not choose any GPU-powered algorithms.")
+        hp_prompt = hp_prompt.replace("[CUDA_WARNING]", "Current machine supports CUDA, some algorithms can be accelerated by GPU if needed." if (torch is not None and torch.cuda.is_available()) else "\nCurrent machine doesn't support CUDA, do not choose any GPU-powered algorithms.")
         # hp_prompt = hp_prompt.replace("[ALGORITHM_DESCRIPTION]", algorithm_optimum_reason)
         hp_prompt = hp_prompt.replace("[PRIMARY_HYPERPARAMETERS]", ', '.join(primary_params))
         hp_prompt = hp_prompt.replace("[HYPERPARAMETER_INFO]", hp_info_str)

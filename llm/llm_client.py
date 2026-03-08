@@ -3,7 +3,10 @@ import os
 import json
 from typing import Optional, Dict, Any, Union
 from openai import OpenAI
-from .ollama_client import OllamaClient
+try:
+    from .ollama_client import OllamaClient
+except ImportError:
+    OllamaClient = None
 
 try:
     from pydantic import BaseModel
@@ -94,6 +97,8 @@ class LLMClient:
                 base_url="https://openrouter.ai/api/v1"
             )
         elif self.provider == 'ollama':
+            if OllamaClient is None:
+                raise ValueError("Ollama provider unavailable: install 'requests' package")
             self.client = OllamaClient()
         else:
             raise ValueError(f"Unsupported LLM provider: {self.provider}")

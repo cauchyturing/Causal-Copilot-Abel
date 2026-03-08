@@ -20,8 +20,12 @@ from causal_discovery.wrappers.base import CausalDiscoveryAlgorithm
 from causal_discovery.evaluation.evaluator import GraphEvaluator
 from causal_discovery.wrappers.utils.ts_utils import generate_stationary_linear
 
-import torch
-cuda_available = torch.cuda.is_available()
+try:
+    import torch
+    cuda_available = torch.cuda.is_available()
+except ImportError:
+    torch = None
+    cuda_available = False
 try:
     from culingam.varlingam import VARLiNGAM as AcVarLiNGAM
     from culingam.utils import check_array

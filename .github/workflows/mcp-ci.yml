@@ -1,0 +1,90 @@
+name: MCP CI
+
+on:
+  push:
+    branches: [main, feat/mcp-*]
+    paths:
+      - 'causal_copilot/mcp/**'
+      - 'causal_discovery/**'
+      - 'tests/test_mcp*.py'
+      - 'Dockerfile.mcp-*'
+      - 'requirements_mcp_core.txt'
+      - '.github/workflows/mcp-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'causal_copilot/mcp/**'
+      - 'causal_discovery/**'
+      - 'tests/test_mcp*.py'
+      - 'Dockerfile.mcp-*'
+      - 'requirements_mcp_core.txt'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements_mcp_core.txt
+          pip install pytest
+
+      - name: Run MCP unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}:${{ github.workspace }}/externals:${{ github.workspace }}/externals/causal-learn
+        run: |
+          pytest tests/test_mcp.py tests/test_mcp_golden.py tests/test_mcp_integration.py tests/test_mcp_resources.py -x -q
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build mcp-core image
+        run: docker build -f Dockerfile.mcp-core -t causal-copilot-mcp:core .
+
+      - name: Verify image starts
+        run: |
+          docker run -d --name mcp-test -p 8000:8000 causal-copilot-mcp:core
+          # Poll until MCP server responds (up to 60s)
+          for i in $(seq 1 12); do
+            SESSION_ID=$(curl -sf -D /dev/stderr \
+              -X POST http://localhost:8000/mcp \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"0.1"}}}' \
+              2>&1 | grep -oP 'mcp-session-id: \K\S+') && break || sleep 5
+          done
+          echo "Session: $SESSION_ID"
+          test -n "$SESSION_ID" || (docker logs mcp-test && exit 1)
+
+      - name: Smoke test discover tool
+        run: |
+          SESSION_ID=$(curl -sf -D /dev/stderr \
+            -X POST http://localhost:8000/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"ci","version":"0.1"}}}' \
+            2>&1 | grep -oP 'mcp-session-id: \K\S+')
+          RESP=$(curl -sf -X POST http://localhost:8000/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H "Mcp-Session-Id: $SESSION_ID" \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"discover","arguments":{"csv_data":"A,B,C\n1,2,3\n2,4,5\n3,6,8\n4,8,10\n5,10,13\n6,12,15\n7,14,18\n8,16,20\n9,18,23\n10,20,25\n11,22,27\n12,24,30","algorithm":"PC","seed":42}}}')
+          echo "$RESP"
+          echo "$RESP" | grep -q '"ok"' || (echo "FAIL: discover did not return ok" && exit 1)
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f mcp-test 2>/dev/null || true

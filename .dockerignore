@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitmodules
+
+# Virtual environments
+.venv
+venv
+env
+
+# IDE / editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Data files (users provide via CSV)
+data/
+output/
+
+# Build artifacts
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist/
+build/
+*.whl
+
+# Docs and plans (not needed at runtime)
+docs/
+*.md
+!README.md
+
+# CI/CD configs
+.github/
+.claude/
+
+# Misc
+.env
+.env.*
+*.log
+.pytest_cache
+.coverage
+htmlcov/

@@ -129,7 +129,7 @@ We provide some examples of our system automatically generated reports for open-
 </div>
 </h1>
 
-- Causal-Copilot integrates over twenty state-of-the-art causal analysis algorithms, broadly categorized into **causal discovery**, **causal inference**, and **auxiliary analysis tools**.
+- The pip-installable package ships **19 causal discovery algorithms** across 5 families (constraint-based, score-based, functional, hybrid, time-series), with automatic dependency probing so only algorithms whose backends are installed are offered. The full research system (run from source) additionally supports causal inference and report generation.
 
 <h1 align="center">
 <div style="text-align: center;">

@@ -103,3 +103,35 @@ def _build_registry() -> dict[str, AlgorithmSpec]:
 
 
 REGISTRY: dict[str, AlgorithmSpec] = _build_registry()
+
+# pip-name -> import-name for availability checks
+_PKG_IMPORT_MAP: dict[str, str] = {
+    "causal-learn": "causallearn",
+    "castle": "castle",
+    "tigramite": "tigramite",
+    "statsmodels": "statsmodels",
+    "lingam": "lingam",
+}
+
+
+def is_algorithm_available(name: str) -> bool:
+    """Check whether *name*'s upstream packages are importable.
+
+    Returns True if every package listed in the spec's ``upstream_packages``
+    can be imported, False otherwise.  Unknown algorithms return False.
+    """
+    spec = REGISTRY.get(name)
+    if spec is None:
+        return False
+    for pkg in spec.upstream_packages:
+        import_name = _PKG_IMPORT_MAP.get(pkg, pkg)
+        try:
+            __import__(import_name)
+        except ImportError:
+            return False
+    return True
+
+
+def available_algorithms() -> dict[str, AlgorithmSpec]:
+    """Return the subset of REGISTRY whose deps are importable."""
+    return {name: spec for name, spec in REGISTRY.items() if is_algorithm_available(name)}

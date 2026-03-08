@@ -126,8 +126,17 @@ def cmd_analyze(args):
 
 def cmd_benchmark(args):
     """Run benchmark evaluation."""
-    from benchmarks.runner import run_benchmark
-    from benchmarks.scenarios import ALL_SCENARIOS
+    try:
+        from benchmarks.runner import run_benchmark
+        from benchmarks.scenarios import ALL_SCENARIOS
+    except ImportError:
+        print(
+            "Error: benchmarks package is not installed.\n"
+            "The 'benchmark' command is only available when running from source.\n"
+            "Clone the repo and run:  python -m causal_copilot benchmark ...",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     from causal_copilot.algorithms.registry import REGISTRY
 
     algorithms = [args.algorithm] if args.algorithm else list(REGISTRY.keys())

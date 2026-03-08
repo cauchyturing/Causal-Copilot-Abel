@@ -1,5 +1,6 @@
 """Tests for the CLI commands."""
 
+import builtins
 import json
 from unittest.mock import patch
 
@@ -117,6 +118,19 @@ class TestBenchmarkCLI:
         out = capsys.readouterr().out
         assert "benchmark" in out.lower() or "algorithm" in out.lower()
 
+    def test_benchmark_import_error(self, capsys):
+        """When benchmarks package is missing, print helpful error and exit 1."""
+        with (
+            patch.dict("sys.modules", {"benchmarks": None, "benchmarks.runner": None, "benchmarks.scenarios": None}),
+            patch("builtins.__import__", side_effect=_block_benchmarks_import()),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["benchmark"])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "benchmarks" in err.lower()
+        assert "source" in err.lower()
+
     @pytest.mark.slow
     def test_benchmark_single(self, tmp_path):
         """Run benchmark on one algo + one scenario."""
@@ -216,3 +230,15 @@ class _mock_algorithm:
 
     def __exit__(self, *args):
         self._patcher.stop()
+
+
+def _block_benchmarks_import():
+    """Return a side_effect function that blocks benchmarks.* imports."""
+    _real_import = builtins.__import__
+
+    def _fake(name, *args, **kwargs):
+        if name.startswith("benchmarks"):
+            raise ImportError(f"No module named '{name}'")
+        return _real_import(name, *args, **kwargs)
+
+    return _fake

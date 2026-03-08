@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from causal_copilot.agent import _CONTEXT_DIR
 from causal_copilot.agent.llm import AgentLLM
-from causal_copilot.algorithms.registry import REGISTRY
+from causal_copilot.algorithms.registry import REGISTRY, available_algorithms
 
 
 def _load_text(rel_path: str) -> str:
@@ -25,10 +25,12 @@ def _load_json(rel_path: str) -> dict:
 def _build_algorithm_catalog() -> dict[str, dict]:
     """Build catalog of registered algorithms with context profiles and HP specs.
 
-    Only includes algorithms that are BOTH in the REGISTRY and have context files.
+    Only includes algorithms that are in the REGISTRY, have context files,
+    AND whose upstream dependencies are actually importable.
     """
     catalog: dict[str, dict] = {}
-    for name in REGISTRY:
+    avail = available_algorithms()
+    for name in avail:
         profile_path = _CONTEXT_DIR / "algos" / f"{name}.txt"
         hp_path = _CONTEXT_DIR / "hyperparameters" / f"{name}.json"
         if profile_path.exists():

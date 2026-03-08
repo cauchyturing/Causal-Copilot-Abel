@@ -1,5 +1,7 @@
 """Tests for rule-based planner and data guards."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -23,7 +25,14 @@ class TestDataProperties:
         assert props["is_time_series"] is True
 
 
+def _all_available(name):
+    """Mock: pretend every algorithm is available."""
+    return True
+
+
 class TestRuleBasedPlanner:
+    """Tests for the decision tree logic (all algorithms mocked as available)."""
+
     def test_small_linear_selects_pc(self):
         props = {
             "n_samples": 500,
@@ -34,7 +43,8 @@ class TestRuleBasedPlanner:
             "has_missing": False,
             "missing_ratio": 0,
         }
-        decision = rule_based_select(props)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
         assert decision.algorithm == "PC"
 
     def test_time_series_selects_pcmci(self):
@@ -47,7 +57,8 @@ class TestRuleBasedPlanner:
             "has_missing": False,
             "missing_ratio": 0,
         }
-        decision = rule_based_select(props)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
         assert decision.algorithm == "PCMCI"
 
     def test_large_data_selects_notears(self):
@@ -60,7 +71,8 @@ class TestRuleBasedPlanner:
             "has_missing": False,
             "missing_ratio": 0,
         }
-        decision = rule_based_select(props)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
         assert decision.algorithm == "NOTEARSLinear"
 
     def test_non_gaussian_selects_lingam(self):
@@ -73,7 +85,8 @@ class TestRuleBasedPlanner:
             "has_missing": False,
             "missing_ratio": 0,
         }
-        decision = rule_based_select(props)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
         assert decision.algorithm == "DirectLiNGAM"
 
     def test_decision_has_reason(self):
@@ -86,9 +99,72 @@ class TestRuleBasedPlanner:
             "has_missing": False,
             "missing_ratio": 0,
         }
-        decision = rule_based_select(props)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
         assert len(decision.reason) > 0
         assert isinstance(decision.hyperparams, dict)
+
+
+class TestPlannerFallbacks:
+    """Verify planner falls back when an algorithm's deps are missing."""
+
+    def _props(self, **overrides):
+        base = {
+            "n_samples": 500,
+            "n_features": 10,
+            "is_time_series": False,
+            "likely_linear": True,
+            "likely_gaussian": True,
+            "has_missing": False,
+            "missing_ratio": 0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_notears_unavailable_falls_back_to_ges(self):
+        """Large data should get NOTEARSLinear; if unavailable, fall back to GES."""
+        props = self._props(n_samples=10000, n_features=50)
+        with patch(
+            "causal_copilot.core.planner._is_available",
+            side_effect=lambda name: name != "NOTEARSLinear",
+        ):
+            decision = rule_based_select(props)
+        assert decision.algorithm == "GES"
+        assert "unavailable" in decision.reason.lower() or "falling back" in decision.reason.lower()
+
+    def test_pcmci_unavailable_falls_back_to_granger(self):
+        props = self._props(is_time_series=True)
+        with patch(
+            "causal_copilot.core.planner._is_available",
+            side_effect=lambda name: name not in ("PCMCI",),
+        ):
+            decision = rule_based_select(props)
+        assert decision.algorithm == "GrangerCausality"
+
+    def test_all_timeseries_unavailable_falls_back_to_ges(self):
+        props = self._props(is_time_series=True)
+        with patch(
+            "causal_copilot.core.planner._is_available",
+            side_effect=lambda name: name not in ("PCMCI", "GrangerCausality"),
+        ):
+            decision = rule_based_select(props)
+        assert decision.algorithm == "GES"
+
+    def test_directlingam_unavailable_falls_back_to_icalingam(self):
+        props = self._props(likely_gaussian=False)
+        with patch(
+            "causal_copilot.core.planner._is_available",
+            side_effect=lambda name: name != "DirectLiNGAM",
+        ):
+            decision = rule_based_select(props)
+        assert decision.algorithm == "ICALiNGAM"
+
+    def test_all_available_no_fallback(self):
+        """When all deps are present, original choices are preserved."""
+        props = self._props(n_samples=10000, n_features=50)
+        with patch("causal_copilot.core.planner._is_available", side_effect=_all_available):
+            decision = rule_based_select(props)
+        assert decision.algorithm == "NOTEARSLinear"
 
 
 class TestDataValidation:

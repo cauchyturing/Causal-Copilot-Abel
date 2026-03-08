@@ -1,6 +1,12 @@
 """Tests for the unified algorithm registry."""
 
-from causal_copilot.algorithms.registry import REGISTRY
+from unittest.mock import patch
+
+from causal_copilot.algorithms.registry import (
+    REGISTRY,
+    available_algorithms,
+    is_algorithm_available,
+)
 
 
 class TestAlgorithmSpec:
@@ -39,6 +45,36 @@ class TestAlgorithmSpec:
         for name, spec in REGISTRY.items():
             adapter = spec.adapter_cls()
             assert adapter.name == name
+
+
+class TestAlgorithmAvailability:
+    def test_unknown_algorithm_not_available(self):
+        assert is_algorithm_available("FakeAlgo9000") is False
+
+    def test_available_algorithms_subset_of_registry(self):
+        avail = available_algorithms()
+        assert set(avail.keys()).issubset(set(REGISTRY.keys()))
+
+    def test_available_returns_specs(self):
+        avail = available_algorithms()
+        for name, spec in avail.items():
+            assert spec is REGISTRY[name]
+
+    def test_missing_dep_makes_unavailable(self):
+        """When a package import fails, the algorithm is marked unavailable."""
+        real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "castle":
+                raise ImportError("fake missing castle")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_fake_import):
+            assert is_algorithm_available("NOTEARSLinear") is False
+
+    def test_all_deps_present_means_available(self):
+        """PC depends on causal-learn which is bundled — should always be available."""
+        assert is_algorithm_available("PC") is True
 
 
 class TestRegistryIsCanonical:

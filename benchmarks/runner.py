@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 from benchmarks.capability import CAPABILITY_MATRIX
-from benchmarks.datasets import STANDARD_DATASETS
+from benchmarks.datasets import BENCHMARK_DATASETS
 from benchmarks.evaluate import DiscoveryMetrics, evaluate_adjacency
 from benchmarks.scenarios import ALL_SCENARIOS
 
@@ -87,7 +87,7 @@ def run_benchmark(
 
     Args:
         algorithm: Algorithm name (must be in REGISTRY).
-        scenario_name: Name from ALL_SCENARIOS or STANDARD_DATASETS.
+        scenario_name: Name from ALL_SCENARIOS or BENCHMARK_DATASETS.
         seed: Random seed for reproducibility.
         timeout: Timeout in seconds.
         skip_incompatible: If True, skip algorithm/scenario pairs that
@@ -109,8 +109,8 @@ def run_benchmark(
         scenario = ALL_SCENARIOS[scenario_name]
         data = scenario.data
         ground_truth = scenario.ground_truth
-    elif scenario_name in STANDARD_DATASETS:
-        ds = STANDARD_DATASETS[scenario_name]
+    elif scenario_name in BENCHMARK_DATASETS:
+        ds = BENCHMARK_DATASETS[scenario_name]
         data = ds.data
         ground_truth = ds.ground_truth
     else:

@@ -70,7 +70,6 @@ class TestAgentContextFiles:
 # ---------------------------------------------------------------------------
 
 
-@needs_openai
 class TestAgentLLM:
     def test_import(self):
         from causal_copilot.agent.llm import AgentLLM
@@ -134,7 +133,6 @@ def _mock_llm_complete(prompt, system="", json_mode=False):
 # ---------------------------------------------------------------------------
 
 
-@needs_openai
 class TestAlgorithmSelector:
     def test_import(self):
         from causal_copilot.agent.selector import select_algorithm
@@ -227,7 +225,6 @@ class TestAlgorithmSelector:
         assert d.source == "llm"
 
 
-@needs_openai
 class TestHyperparameterTuner:
     def test_import(self):
         from causal_copilot.agent.selector import tune_hyperparameters
@@ -277,7 +274,6 @@ class TestHyperparameterTuner:
 # ---------------------------------------------------------------------------
 
 
-@needs_openai
 class TestAgentCopilot:
     def test_import(self):
         from causal_copilot.agent import AgentCopilot

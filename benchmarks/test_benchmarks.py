@@ -180,17 +180,17 @@ class TestExpandedMetrics:
 # Standard benchmark datasets
 # ---------------------------------------------------------------------------
 
-from benchmarks.datasets import STANDARD_DATASETS, StandardDataset
+from benchmarks.datasets import BENCHMARK_DATASETS, BenchmarkDataset
 
 
-class TestStandardDatasets:
-    def test_has_standard_datasets(self):
-        assert len(STANDARD_DATASETS) >= 3
+class TestBenchmarkDatasets:
+    def test_has_benchmark_datasets(self):
+        assert len(BENCHMARK_DATASETS) >= 3
 
     @pytest.mark.parametrize("name", ["sachs", "asia", "alarm"])
     def test_dataset_structure(self, name):
-        ds = STANDARD_DATASETS[name]
-        assert isinstance(ds, StandardDataset)
+        ds = BENCHMARK_DATASETS[name]
+        assert isinstance(ds, BenchmarkDataset)
         assert ds.data.shape[0] > 0
         assert ds.data.shape[1] > 1
         assert ds.ground_truth.shape[0] == ds.ground_truth.shape[1]
@@ -199,7 +199,7 @@ class TestStandardDatasets:
 
     @pytest.mark.parametrize("name", ["sachs", "asia", "alarm"])
     def test_dataset_ground_truth_is_dag(self, name):
-        ds = STANDARD_DATASETS[name]
+        ds = BENCHMARK_DATASETS[name]
         gt = ds.ground_truth
         assert np.all(np.diag(gt) == 0)
         n = gt.shape[0]
@@ -210,7 +210,7 @@ class TestStandardDatasets:
 
     def test_sachs_edge_list(self):
         """Guard the Sachs edge list against accidental edits (paper Fig. 3A)."""
-        ds = STANDARD_DATASETS["sachs"]
+        ds = BENCHMARK_DATASETS["sachs"]
         gt = ds.ground_truth
         col = {c: i for i, c in enumerate(ds.columns)}
         n_edges = int((gt > 0).sum())
@@ -224,13 +224,13 @@ class TestStandardDatasets:
 
     def test_alarm_description_is_honest(self):
         """ALARM dataset must not claim to be the real ALARM network."""
-        ds = STANDARD_DATASETS["alarm"]
+        ds = BENCHMARK_DATASETS["alarm"]
         desc = ds.description.lower()
         assert "synthetic" in desc, f"ALARM description should contain 'synthetic': {ds.description}"
 
     def test_dataset_deterministic(self):
-        ds1 = STANDARD_DATASETS["sachs"]
-        ds2 = STANDARD_DATASETS["sachs"]
+        ds1 = BENCHMARK_DATASETS["sachs"]
+        ds2 = BENCHMARK_DATASETS["sachs"]
         np.testing.assert_array_equal(ds1.data.values, ds2.data.values)
 
 

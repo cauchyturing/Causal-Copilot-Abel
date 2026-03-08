@@ -1,7 +1,9 @@
-"""Standard benchmark datasets for causal discovery evaluation.
+"""Synthetic benchmark datasets for causal discovery evaluation.
 
-Provides well-known DAGs (Sachs, Asia) and a synthetic ALARM-scale graph,
-each with linear Gaussian data generated from the ground-truth structure.
+Provides linear Gaussian data generated from well-known DAG structures
+(Sachs, Asia) and a random ALARM-scale graph.  The graph topologies are
+taken from the literature, but the data is SYNTHETIC — generated via
+``_generate_from_dag()`` with fixed seeds for reproducibility.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import pandas as pd
 
 
 @dataclass
-class StandardDataset:
+class BenchmarkDataset:
     """A benchmark dataset with known ground truth."""
 
     name: str
@@ -79,7 +81,7 @@ def _generate_from_dag(
     return pd.DataFrame(data, columns=columns)
 
 
-def _build_sachs() -> StandardDataset:
+def _build_sachs() -> BenchmarkDataset:
     """Sachs et al. 2005 — 11 proteins, 17 edges."""
     columns = [
         "Raf", "Mek", "PLCg", "PIP2", "PIP3",
@@ -106,7 +108,7 @@ def _build_sachs() -> StandardDataset:
         adj[col_idx[tgt], col_idx[src]] = 1
 
     data = _generate_from_dag(adj, columns, n=1000, seed=42)
-    return StandardDataset(
+    return BenchmarkDataset(
         name="sachs",
         description="Sachs et al. 2005 — 11-protein signaling network (17 edges)",
         data=data,
@@ -116,7 +118,7 @@ def _build_sachs() -> StandardDataset:
     )
 
 
-def _build_asia() -> StandardDataset:
+def _build_asia() -> BenchmarkDataset:
     """Lauritzen & Spiegelhalter 1988 — 8 nodes, 8 edges."""
     columns = [
         "Asia", "Tuberculosis", "Smoking", "LungCancer",
@@ -140,7 +142,7 @@ def _build_asia() -> StandardDataset:
         adj[col_idx[tgt], col_idx[src]] = 1
 
     data = _generate_from_dag(adj, columns, n=1000, seed=43)
-    return StandardDataset(
+    return BenchmarkDataset(
         name="asia",
         description="Lauritzen & Spiegelhalter 1988 — 8-node chest clinic model (8 edges)",
         data=data,
@@ -150,7 +152,7 @@ def _build_asia() -> StandardDataset:
     )
 
 
-def _build_alarm() -> StandardDataset:
+def _build_alarm() -> BenchmarkDataset:
     """Synthetic sparse DAG — 37 nodes, 46 edges (ALARM-scale).
 
     NOTE: This is NOT the real ALARM network from Beinlich et al. 1989.
@@ -182,7 +184,7 @@ def _build_alarm() -> StandardDataset:
         edges_added += 1
 
     data = _generate_from_dag(adj, columns, n=1000, seed=44)
-    return StandardDataset(
+    return BenchmarkDataset(
         name="alarm",
         description="Synthetic sparse DAG — 37 nodes, 46 edges (ALARM-scale, not the real ALARM network)",
         data=data,
@@ -193,7 +195,7 @@ def _build_alarm() -> StandardDataset:
 
 
 # Pre-build all datasets at import time (deterministic, fast)
-STANDARD_DATASETS: dict[str, StandardDataset] = {
+BENCHMARK_DATASETS: dict[str, BenchmarkDataset] = {
     "sachs": _build_sachs(),
     "asia": _build_asia(),
     "alarm": _build_alarm(),

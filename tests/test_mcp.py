@@ -231,3 +231,118 @@ class TestMCPCLI:
 
         with pytest.raises(SystemExit):
             main(["mcp", "--help"])
+
+
+class TestRefineGraphTool:
+    def test_refine_simple_graph(self):
+        from causal_copilot.mcp.server import refine_graph
+
+        adj = [[0, 0, 0], [1, 0, 0], [0, 1, 0]]
+        names = ["X", "Y", "Z"]
+        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
+        assert result["status"] == "ok"
+        assert "graph_kind" in result
+        assert result["graph_kind"] == "dag"
+        assert "edge_confidence" in result
+        assert result["n_directed"] == 2
+
+    def test_dimension_mismatch(self):
+        from causal_copilot.mcp.server import refine_graph
+
+        adj = [[0, 1], [0, 0]]
+        names = ["A", "B", "C"]
+        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
+        assert result["status"] == "error"
+
+    def test_invalid_json(self):
+        from causal_copilot.mcp.server import refine_graph
+
+        result = json.loads(refine_graph("not-json", '["A"]'))
+        assert result["status"] == "error"
+
+    def test_cpdag_detected(self):
+        from causal_copilot.mcp.server import refine_graph
+
+        # Undirected edge -> CPDAG
+        adj = [[0, 2], [2, 0]]
+        names = ["A", "B"]
+        result = json.loads(refine_graph(json.dumps(adj), json.dumps(names)))
+        assert result["status"] == "ok"
+        assert result["graph_kind"] == "cpdag"
+
+    def test_run_id_passthrough(self):
+        from causal_copilot.mcp.server import refine_graph
+
+        adj = [[0, 0], [1, 0]]
+        names = ["X", "Y"]
+        result = json.loads(refine_graph(
+            json.dumps(adj), json.dumps(names), run_id="test-123",
+        ))
+        assert result["run_id"] == "test-123"
+
+
+class TestEstimateEffectsTool:
+    def test_dag_allows_inference(self):
+        from causal_copilot.mcp.server import estimate_effects
+
+        adj = [[0, 0], [1, 0]]
+        names = ["X", "Y"]
+        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(100))
+        result = json.loads(estimate_effects(
+            json.dumps(adj), json.dumps(names), csv,
+            treatment="X", outcome="Y",
+        ))
+        assert result["status"] == "ok"
+        assert result["inference_method"] == "standard"
+        assert result["graph_kind"] == "dag"
+
+    def test_pag_rejects_inference(self):
+        from causal_copilot.mcp.server import estimate_effects
+
+        adj = [[0, 4], [5, 0]]
+        names = ["A", "B"]
+        csv = "a,b\n" + "\n".join(f"{i},{i*2}" for i in range(50))
+        result = json.loads(estimate_effects(
+            json.dumps(adj), json.dumps(names), csv,
+            treatment="A", outcome="B",
+        ))
+        assert result["status"] == "error"
+        assert "PAG" in result["error"]
+
+    def test_missing_treatment(self):
+        from causal_copilot.mcp.server import estimate_effects
+
+        adj = [[0, 0], [1, 0]]
+        names = ["X", "Y"]
+        csv = "x,y\n1,2\n3,4"
+        result = json.loads(estimate_effects(
+            json.dumps(adj), json.dumps(names), csv,
+        ))
+        assert result["status"] == "error"
+
+    def test_treatment_not_in_names(self):
+        from causal_copilot.mcp.server import estimate_effects
+
+        adj = [[0, 0], [1, 0]]
+        names = ["X", "Y"]
+        csv = "x,y\n1,2\n3,4"
+        result = json.loads(estimate_effects(
+            json.dumps(adj), json.dumps(names), csv,
+            treatment="Z", outcome="Y",
+        ))
+        assert result["status"] == "error"
+        assert "Z" in result["error"]
+
+    def test_cpdag_numeric_allows_ida(self):
+        from causal_copilot.mcp.server import estimate_effects
+
+        # CPDAG (undirected edges) with numeric data -> IDA
+        adj = [[0, 2], [2, 0]]
+        names = ["X", "Y"]
+        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
+        result = json.loads(estimate_effects(
+            json.dumps(adj), json.dumps(names), csv,
+            treatment="X", outcome="Y",
+        ))
+        assert result["status"] == "ok"
+        assert result["inference_method"] == "ida"

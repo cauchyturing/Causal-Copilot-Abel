@@ -1,0 +1,22 @@
+# Hybrid Algorithm Profile
+
+## Executive Summary
+The Hybrid algorithm is a two-stage causal discovery approach that combines constraint-based methods (PC or GES) with functional model-based methods (ANM or PNL). Stage 1 produces a CPDAG, then Stage 2 orients undirected edges using pairwise functional causal tests, followed by Meek's rules for further propagation.
+
+## Key Properties
+- **Family**: Hybrid (constraint + functional)
+- **Output**: DAG (maximally oriented)
+- **Assumptions**: Causal sufficiency; nonlinear functional relationships help with identifiability
+- **Strengths**: Can orient more edges than pure constraint-based methods by leveraging functional asymmetries
+- **Limitations**: Computationally expensive due to pairwise functional tests; PNL/ANM tests may be unreliable with small samples
+
+## Data Handling
+- **Variable Types**: Continuous data (ANM/PNL require continuous variables)
+- **Sample Size**: Moderate to large (>=500 recommended)
+- **Scalability**: Limited by the number of undirected edges requiring functional tests
+
+## Hyperparameters
+- `first_stage_algo`: First stage algorithm, 'pc' or 'ges' (default: 'pc')
+- `second_stage_method`: Functional test method, 'anm' or 'pnl' (default: 'pnl')
+- `alpha`: Significance level (default: 0.05)
+- `m_max`: Maximum number of potential confounders to consider (default: 3)

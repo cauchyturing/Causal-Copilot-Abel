@@ -1,0 +1,21 @@
+# CALM Algorithm Profile
+
+## Executive Summary
+CALM (Causal discovery with Acyclicity and Latent Masking) is a score-based causal discovery algorithm that uses continuous optimization with L0 penalty and Gumbel-Sigmoid approximation. It outputs a DAG and supports GPU acceleration via PyTorch.
+
+## Key Properties
+- **Family**: Score-based (continuous optimization)
+- **Output**: DAG
+- **Assumptions**: Causal sufficiency, acyclicity
+- **Strengths**: L0 sparsity penalty (more natural than L1), GPU acceleration for large graphs
+- **Limitations**: Continuous optimization may find local optima; requires PyTorch
+
+## Data Handling
+- **Variable Types**: Continuous data
+- **Sample Size**: Moderate to large (>=500 recommended)
+- **Scalability**: Good with GPU; moderate on CPU
+
+## Hyperparameters
+- `lambda1`: L0 penalty coefficient (default: 0.005)
+- `alpha`: Significance level for moral graph estimation (default: 0.01)
+- `tau`: Temperature for Gumbel-Sigmoid (default: 0.5)

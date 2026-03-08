@@ -7,30 +7,7 @@ import pandas as pd
 from causallearn.search.ScoreBased.GES import ges as cl_ges
 
 from causal_copilot.algorithms._backends._base import Backend
-
-
-def _convert_to_adjacency_matrix(G) -> np.ndarray:
-    """Convert causal-learn CausalGraph to our adjacency convention.
-
-    Same encoding as PC: adj[i,j]=1 + adj[j,i]=-1 => j->i (directed).
-    """
-    adj_matrix = G.graph
-    inferred_flat = np.zeros_like(adj_matrix)
-
-    indices = np.where(adj_matrix == 1)
-    for i, j in zip(indices[0], indices[1], strict=False):
-        if adj_matrix[j, i] == -1:
-            # directed edge: j -> i
-            inferred_flat[i, j] = 1
-
-    indices = np.where(adj_matrix == -1)
-    for i, j in zip(indices[0], indices[1], strict=False):
-        if adj_matrix[j, i] == -1:
-            # undirected edge: j -- i
-            if inferred_flat[j, i] == 0:
-                inferred_flat[i, j] = 2
-
-    return inferred_flat
+from causal_copilot.algorithms._backends._utils import convert_causallearn_cpdag
 
 
 class GESBackend(Backend):
@@ -56,7 +33,7 @@ class GESBackend(Backend):
             node_names=node_names,
         )
 
-        adj_matrix = _convert_to_adjacency_matrix(record["G"])
+        adj_matrix = convert_causallearn_cpdag(record["G"].graph)
 
         info = {
             "score": record["score"],

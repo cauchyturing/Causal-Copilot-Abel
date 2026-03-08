@@ -1,0 +1,24 @@
+# NOTEARSNonlinear Algorithm Profile
+
+## Executive Summary
+NOTEARS-Nonlinear extends the NOTEARS framework to handle nonlinear causal relationships using neural networks (MLP) or Sobolev basis functions. It formulates structure learning as a continuous optimization problem with acyclicity constraints, enabling gradient-based optimization over the space of DAGs.
+
+## Key Properties
+- **Family**: Score-based (continuous optimization)
+- **Output**: DAG
+- **Assumptions**: Causal sufficiency, acyclicity
+- **Strengths**: Handles nonlinear relationships; continuous optimization avoids combinatorial search
+- **Limitations**: May find local optima; computationally expensive; requires careful tuning of regularization and threshold parameters
+
+## Data Handling
+- **Variable Types**: Continuous data
+- **Sample Size**: Moderate to large (>=500 recommended)
+- **Scalability**: Moderate; GPU support for larger graphs
+
+## Hyperparameters
+- `lambda1`: L1 regularization parameter for sparsity (default: 0.01)
+- `lambda2`: L2 regularization parameter (default: 0.01)
+- `max_iter`: Maximum number of dual ascent steps (default: 100)
+- `w_threshold`: Threshold for edge weights (default: 0.3)
+- `hidden_layers`: Neural network architecture (default: (10, 1))
+- `model_type`: 'mlp' or 'sob' for Sobolev (default: 'mlp')

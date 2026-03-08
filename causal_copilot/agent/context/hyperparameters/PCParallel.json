@@ -1,0 +1,18 @@
+{
+  "algorithm_name": "PCParallel",
+  "alpha": {
+    "meaning": "Desired significance level in (0, 1)",
+    "available_values": [0.05, 0.1, 0.01],
+    "expert_suggestion": "Use 0.05 as default. Adjust based on sample size: 0.1 for small samples (<500), 0.05 for medium (500-10000), 0.01 for large (>10000)."
+  },
+  "indep_test": {
+    "meaning": "Independence test method",
+    "available_values": ["fisherz", "chisq"],
+    "expert_suggestion": "Use 'fisherz' as default for continuous data, 'chisq' for discrete data."
+  },
+  "cores": {
+    "meaning": "Number of parallel cores for CI testing",
+    "available_values": [4, 8, 12, 16],
+    "expert_suggestion": "Use 8 as default. Speedup diminishes beyond 16 cores. Match to available CPU cores."
+  }
+}

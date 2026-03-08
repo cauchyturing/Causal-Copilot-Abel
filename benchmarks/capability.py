@@ -91,4 +91,121 @@ CAPABILITY_MATRIX: dict[str, AlgorithmCapability] = {
             "Predictive, not structural causation",
         ],
     ),
+    # ── Tier 1: causal-learn algorithms ─────────────────────────────
+    "FCI": AlgorithmCapability(
+        name="FCI",
+        output_type="pag",
+        handles_latent_confounders=True,
+        assumptions=[
+            "Faithfulness",
+            "Allows latent confounders",
+            "Linear relationships (with Fisher-z test)",
+        ],
+    ),
+    "GRaSP": AlgorithmCapability(
+        name="GRaSP",
+        output_type="cpdag",
+        assumptions=[
+            "Causal sufficiency",
+            "Faithfulness",
+            "Permutation-based search over orderings",
+        ],
+    ),
+    "CDNOD": AlgorithmCapability(
+        name="CDNOD",
+        output_type="cpdag",
+        assumptions=[
+            "Faithfulness",
+            "Multi-domain / nonstationary data with domain_index",
+            "Linear relationships (with Fisher-z test)",
+        ],
+    ),
+    "VARLiNGAM": AlgorithmCapability(
+        name="VARLiNGAM",
+        output_type="dag",
+        handles_non_gaussian=True,
+        handles_time_series=True,
+        assumptions=[
+            "Linear structural equations",
+            "Non-Gaussian noise (identifiability condition)",
+            "Stationarity (VAR model)",
+        ],
+    ),
+    "CALM": AlgorithmCapability(
+        name="CALM",
+        output_type="dag",
+        assumptions=[
+            "Causal sufficiency",
+            "Continuous optimization with L0 penalty",
+            "Acyclicity via augmented Lagrangian",
+        ],
+    ),
+    # ── Tier 2: gcastle algorithms ──────────────────────────────────
+    "GOLEM": AlgorithmCapability(
+        name="GOLEM",
+        output_type="dag",
+        assumptions=[
+            "Causal sufficiency",
+            "Likelihood-based continuous optimization",
+            "Equal or unequal noise variances",
+        ],
+    ),
+    "NOTEARSNonlinear": AlgorithmCapability(
+        name="NOTEARSNonlinear",
+        output_type="dag",
+        handles_nonlinear=True,
+        assumptions=[
+            "Causal sufficiency",
+            "Nonlinear structural equations (MLP or Sobolev)",
+            "Continuous optimization — may find local optima",
+        ],
+    ),
+    "CORL": AlgorithmCapability(
+        name="CORL",
+        output_type="dag",
+        assumptions=[
+            "Causal sufficiency",
+            "Reinforcement learning-based ordering search",
+            "BIC reward — assumes Gaussian noise for scoring",
+        ],
+    ),
+    "PCParallel": AlgorithmCapability(
+        name="PCParallel",
+        output_type="cpdag",
+        assumptions=[
+            "Causal sufficiency",
+            "Faithfulness",
+            "Parallel implementation of PC for scalability",
+        ],
+    ),
+    # ── Tier 3: Other packages ──────────────────────────────────────
+    "XGES": AlgorithmCapability(
+        name="XGES",
+        output_type="cpdag",
+        assumptions=[
+            "Causal sufficiency",
+            "Faithfulness",
+            "Fast GES variant with optimized search",
+        ],
+    ),
+    "DYNOTEARS": AlgorithmCapability(
+        name="DYNOTEARS",
+        output_type="dag",
+        handles_time_series=True,
+        assumptions=[
+            "Causal sufficiency",
+            "Stationarity",
+            "Continuous optimization (NOTEARS-style) for time-series",
+        ],
+    ),
+    "Hybrid": AlgorithmCapability(
+        name="Hybrid",
+        output_type="dag",
+        handles_nonlinear=True,
+        assumptions=[
+            "Two-stage: constraint-based (PC/GES) + functional (ANM/PNL)",
+            "Nonlinear causal relationships",
+            "Causal sufficiency",
+        ],
+    ),
 }

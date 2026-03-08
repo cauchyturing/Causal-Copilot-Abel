@@ -7,41 +7,7 @@ import pandas as pd
 from causallearn.search.ConstraintBased.PC import pc as cl_pc
 
 from causal_copilot.algorithms._backends._base import Backend
-
-
-def _convert_to_adjacency_matrix(adj_matrix: np.ndarray) -> np.ndarray:
-    """Convert causal-learn's CPDAG encoding to our adjacency convention.
-
-    causal-learn encodes edges as:
-      adj[i,j]=1  and adj[j,i]=-1  =>  directed j -> i
-      adj[i,j]=1  and adj[j,i]=1   =>  bidirected i <-> j
-      adj[i,j]=-1 and adj[j,i]=-1  =>  undirected i -- j
-
-    Our convention:
-      mat[i,j]=1 => directed j -> i
-      mat[i,j]=2 => undirected
-      mat[i,j]=3 => bidirected
-    """
-    inferred_flat = np.zeros_like(adj_matrix)
-
-    indices = np.where(adj_matrix == 1)
-    for i, j in zip(indices[0], indices[1], strict=False):
-        if adj_matrix[j, i] == -1:
-            # directed edge: j -> i
-            inferred_flat[i, j] = 1
-        elif adj_matrix[j, i] == 1:
-            # bidirected edge: j <-> i
-            if inferred_flat[j, i] == 0:
-                inferred_flat[i, j] = 3
-
-    indices = np.where(adj_matrix == -1)
-    for i, j in zip(indices[0], indices[1], strict=False):
-        if adj_matrix[j, i] == -1:
-            # undirected edge: j -- i
-            if inferred_flat[j, i] == 0:
-                inferred_flat[i, j] = 2
-
-    return inferred_flat
+from causal_copilot.algorithms._backends._utils import convert_causallearn_cpdag
 
 
 class PCBackend(Backend):
@@ -75,7 +41,7 @@ class PCBackend(Backend):
             node_names=node_names,
         )
 
-        adj_matrix = _convert_to_adjacency_matrix(cg.G.graph)
+        adj_matrix = convert_causallearn_cpdag(cg.G.graph)
 
         info = {
             "sepset": cg.sepset if hasattr(cg, "sepset") else None,

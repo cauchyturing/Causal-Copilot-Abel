@@ -1,0 +1,23 @@
+# CORL Algorithm Profile
+
+## Executive Summary
+CORL (Causal discovery via Ordering-based Reinforcement Learning) uses a transformer encoder and LSTM decoder to learn causal orderings via reinforcement learning. It outputs a DAG by searching over node orderings using BIC reward.
+
+## Key Properties
+- **Family**: Score-based (reinforcement learning)
+- **Output**: DAG
+- **Assumptions**: Causal sufficiency, acyclicity
+- **Strengths**: Can discover complex structures without explicit parametric assumptions on relationships
+- **Limitations**: Computationally expensive; requires tuning of RL hyperparameters; results may vary across runs
+
+## Data Handling
+- **Variable Types**: Continuous data
+- **Sample Size**: Moderate to large (>=500 recommended)
+- **Scalability**: Moderate; GPU recommended for larger graphs
+
+## Hyperparameters
+- `iteration`: Number of RL training iterations (default: 500)
+- `batch_size`: Batch size for training (default: 64)
+- `reward_score_type`: Scoring function for reward (default: 'BIC')
+- `encoder_name`: Encoder architecture (default: 'transformer')
+- `decoder_name`: Decoder architecture (default: 'lstm')

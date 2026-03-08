@@ -1,0 +1,21 @@
+# PCParallel Algorithm Profile
+
+## Executive Summary
+PCParallel is a parallel implementation of the PC algorithm from the gcastle library. It uses multi-core processing to speed up conditional independence testing, making it suitable for larger graphs where the standard PC implementation is too slow.
+
+## Key Properties
+- **Family**: Constraint-based
+- **Output**: CPDAG
+- **Assumptions**: Causal sufficiency, faithfulness, acyclicity
+- **Strengths**: Parallelized CI testing for significant speedup; same theoretical guarantees as PC
+- **Limitations**: Speedup diminishes beyond ~16 cores; requires gcastle package
+
+## Data Handling
+- **Variable Types**: Continuous data (Fisher-z test) or discrete data
+- **Sample Size**: Moderate to large (>=500 recommended)
+- **Scalability**: Good; designed for larger graphs via parallelization
+
+## Hyperparameters
+- `alpha`: Significance level for independence tests (default: 0.05)
+- `indep_test`: Independence test method (default: 'fisherz')
+- `cores`: Number of parallel cores to use (default: 8)

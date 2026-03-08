@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -17,6 +19,19 @@ from fastmcp import FastMCP
 
 from causal_copilot import CausalCopilot, __version__
 from causal_copilot.algorithms.registry import REGISTRY, available_algorithms
+from causal_copilot.mcp.artifacts import get_store
+from causal_copilot.mcp.bridge import (
+    PIPELINE_ROOT,
+    adj_to_edges,
+    make_args,
+    make_global_state,
+    serialize_result,
+)
+from causal_discovery.pdag_policy import (
+    classify_graph_kind,
+    check_inference_policy,
+    get_identifiable_edges,
+)
 
 mcp = FastMCP(
     "Causal-Copilot",
@@ -26,6 +41,32 @@ mcp = FastMCP(
         "methods and their strengths. Use `explain_graph` to interpret results."
     ),
 )
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+
+    def default(self, obj):
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+@contextmanager
+def _pipeline_cwd():
+    """Temporarily set CWD to pipeline root (legacy code assumes it)."""
+    prev = os.getcwd()
+    os.chdir(PIPELINE_ROOT)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
 
 
 def _adj_to_edges(adj: np.ndarray, columns: list[str]) -> list[dict[str, str]]:
@@ -333,3 +374,174 @@ def explain_graph(
         },
     }
     return json.dumps(explanation, indent=2)
+
+
+@mcp.tool()
+def explain_result(
+    adjacency_matrix: list[list[int]],
+    node_names: list[str],
+    run_id: str = "",
+) -> str:
+    """Explain a causal graph in natural language with identifiability info.
+
+    Enhanced version of explain_graph with graph_kind and identifiability.
+
+    Args:
+        adjacency_matrix: 2D array (mat[i,j]=1 means j->i)
+        node_names: Variable names
+        run_id: Optional run_id from previous call
+
+    Returns:
+        JSON with explanation, graph_stats, graph_kind, identifiability
+    """
+    base_result = json.loads(explain_graph(adjacency_matrix, node_names))
+    if "error" in base_result:
+        return json.dumps(base_result)
+
+    adj = np.array(adjacency_matrix)
+    base_result["graph_kind"] = classify_graph_kind(adj)
+    base_result["identifiability"] = get_identifiable_edges(adj, node_names)
+
+    return json.dumps(base_result)
+
+
+@mcp.tool()
+def diagnose_data(csv_data: str) -> str:
+    """Analyze dataset statistical characteristics for causal discovery.
+
+    Returns linearity, gaussianity, missingness, data type, sample size,
+    feature count, and time-series detection. Use this to understand your
+    data before choosing an algorithm.
+
+    Args:
+        csv_data: CSV string with header row
+
+    Returns:
+        JSON with diagnosis dict + status
+    """
+    try:
+        df = pd.read_csv(io.StringIO(csv_data))
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+
+    if df.empty or df.shape[1] < 2:
+        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+
+    try:
+        from preprocess.stat_info_functions import stat_info_collection
+
+        gs = make_global_state(df)
+        with _pipeline_cwd():
+            gs = stat_info_collection(gs)
+
+        stats = gs.statistics
+
+        def _jsonable(v):
+            """Coerce numpy types to Python builtins for JSON."""
+            if isinstance(v, (np.bool_, np.integer)):
+                return v.item()
+            if isinstance(v, np.floating):
+                return float(v)
+            return v
+
+        diagnosis = {
+            "linearity": _jsonable(getattr(stats, "linearity", None)),
+            "gaussian_error": _jsonable(getattr(stats, "gaussian_error", None)),
+            "missingness": _jsonable(getattr(stats, "missingness", None)),
+            "data_type": getattr(stats, "data_type", None),
+            "sample_size": _jsonable(getattr(stats, "sample_size", None)),
+            "feature_number": _jsonable(getattr(stats, "feature_number", None)),
+            "time_series": _jsonable(getattr(stats, "time_series", None)),
+            "features": gs.user_data.selected_features,
+        }
+        return json.dumps({"status": "ok", "diagnosis": diagnosis}, indent=2, cls=_NumpyEncoder)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Diagnosis failed: {e}"})
+
+
+@mcp.tool()
+def run_algorithm(
+    csv_data: str,
+    algorithm: str,
+    hyperparameters: str = "{}",
+    seed: int = 42,
+) -> str:
+    """Run a specific causal discovery algorithm with given hyperparameters.
+
+    No automatic selection, no postprocessing. Returns the raw graph.
+
+    Args:
+        csv_data: CSV string with header row
+        algorithm: Algorithm name (e.g., "PC", "GES", "DirectLiNGAM")
+        hyperparameters: JSON string of algorithm hyperparameters
+        seed: Random seed
+
+    Returns:
+        JSON with adjacency_matrix, edges, graph_kind, run_id, provenance
+    """
+    if not algorithm or not algorithm.strip():
+        return json.dumps({"status": "error", "error": "algorithm must not be empty."})
+
+    try:
+        hp = json.loads(hyperparameters)
+    except json.JSONDecodeError as e:
+        return json.dumps({"status": "error", "error": f"Invalid hyperparameters JSON: {e}"})
+
+    try:
+        df = pd.read_csv(io.StringIO(csv_data))
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+
+    if df.empty or df.shape[1] < 2:
+        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+
+    try:
+        from causal_discovery.ci_test_resolver import resolve_ci_test
+        from causal_discovery.program import Programming
+        from causal_discovery.score_resolver import resolve_score_func
+        from preprocess.stat_info_functions import stat_info_collection
+
+        gs = make_global_state(df, algorithm=algorithm, seed=seed)
+        args = make_args(seed=seed)
+
+        with _pipeline_cwd():
+            gs = stat_info_collection(gs)
+
+            # Apply user hyperparameters
+            algo_args = dict(hp)
+
+            # Resolver overrides: correct CI test / score func for the data
+            ci_test_algos = {
+                "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
+                "BAMB", "HITONMB", "IAMBnPC", "MBOR",
+            }
+            if algorithm in ci_test_algos:
+                algo_args["indep_test"] = resolve_ci_test(gs.statistics)
+
+            score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
+            if algorithm in score_algos:
+                algo_args["score_func"] = resolve_score_func(gs.statistics, algorithm)
+
+            if algorithm == "PC" and gs.statistics.missingness:
+                algo_args["mvpc"] = True
+
+            gs.algorithm.algorithm_arguments = algo_args
+
+            gs = Programming(args).forward(gs)
+
+        node_names = gs.user_data.selected_features
+        provenance = {
+            "algorithm": algorithm,
+            "hyperparameters": algo_args,
+            "seed": seed,
+            "planner": "user-specified",
+        }
+        result = serialize_result(gs, node_names=node_names, provenance=provenance)
+
+        # Save to artifact store
+        run_id = get_store().save(result)
+        result["run_id"] = run_id
+
+        return json.dumps(result, indent=2, cls=_NumpyEncoder)
+    except Exception as e:
+        return json.dumps({"status": "error", "error": f"Algorithm execution failed: {e}"})

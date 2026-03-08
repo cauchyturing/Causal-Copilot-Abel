@@ -155,6 +155,76 @@ class TestExplainGraphTool:
         assert "Causal chain" in result["explanation"]
 
 
+class _MockWrapper:
+    """Mock wrapper that mimics a causal discovery algorithm wrapper."""
+
+    def __init__(self, args=None):
+        pass
+
+    def fit(self, data, **kwargs):
+        n = data.shape[1]
+        return np.zeros((n, n)), {"mock": True}, None
+
+
+class _mock_run_algorithm:
+    """Context manager that patches wrappers so Programming.forward works."""
+
+    def __enter__(self):
+        self._patcher = patch(
+            "causal_discovery.wrappers.PC",
+            _MockWrapper,
+        )
+        self._patcher.start()
+        return self
+
+    def __exit__(self, *args):
+        self._patcher.stop()
+
+
+class TestDiagnoseDataTool:
+    def test_basic_diagnosis(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        result = json.loads(diagnose_data(csv))
+        assert result["status"] == "ok"
+        assert "linearity" in result["diagnosis"]
+        assert "data_type" in result["diagnosis"]
+        assert "sample_size" in result["diagnosis"]
+
+    def test_empty_csv(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        result = json.loads(diagnose_data(""))
+        assert result["status"] == "error"
+
+
+class TestRunAlgorithmTool:
+    def test_run_with_mock(self):
+        from causal_copilot.mcp.server import run_algorithm
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_run_algorithm():
+            result = json.loads(run_algorithm(csv, algorithm="PC"))
+        assert result["status"] == "ok"
+        assert "adjacency_matrix" in result
+        assert "run_id" in result
+
+    def test_missing_algorithm(self):
+        from causal_copilot.mcp.server import run_algorithm
+
+        result = json.loads(run_algorithm("a,b\n1,2\n3,4", algorithm=""))
+        assert result["status"] == "error"
+
+
 class TestMCPCLI:
     def test_mcp_help(self, capsys):
         from causal_copilot.cli import main

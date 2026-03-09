@@ -626,6 +626,7 @@ class CausalCopilot:
             Updated CausalResult with populated effects dict.
         """
         from causal_copilot.mcp.offline import (
+            get_default_estimation_config,
             identify_confounders,
             prepare_treatment,
             select_estimation_method,
@@ -657,6 +658,14 @@ class CausalCopilot:
         props = self._last_properties or {}
         is_linear = bool(props.get("likely_linear", True))
         is_gaussian = bool(props.get("likely_gaussian", True))
+
+        # Time-series warning: causal effect estimation assumes i.i.d. samples
+        if props.get("is_time_series", False):
+            warnings_list.append(
+                "Time-series structure detected — causal effect estimation "
+                "assumes i.i.d. samples. Results may be biased if temporal "
+                "lag structure matters. Consider time-series-specific methods."
+            )
 
         # --- Treatment type dispatch (4 cases, matching original) ---
         _, T0, T1, treatment_kind = prepare_treatment(
@@ -817,8 +826,14 @@ class CausalCopilot:
                 )
             elif selected_method == "metalearner":
                 X_col = [c for c in names if c != treatment and c != outcome]
-                # Pick learner variant based on data (matches original)
-                learner = "t" if is_linear else "x"
+                # Data-driven learner selection (S/T/X/DA based on balance + linearity)
+                ml_config = get_default_estimation_config(
+                    "metalearner",
+                    df,
+                    treatment,
+                    is_linear=is_linear,
+                )
+                learner = ml_config.get("learner", "t")
                 estimates = estimate_metalearner(
                     df,
                     treatment,

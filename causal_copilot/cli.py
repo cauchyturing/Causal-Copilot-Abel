@@ -92,7 +92,7 @@ def cmd_version(args):
 
 
 def cmd_analyze(args):
-    """Run causal discovery on a CSV file."""
+    """Run causal discovery on a CSV file, optionally followed by effect estimation."""
     from causal_copilot import CausalCopilot
 
     try:
@@ -108,12 +108,30 @@ def cmd_analyze(args):
         seed=args.seed,
     )
 
+    # Run estimation if treatment/outcome specified
+    if result.status == "ok" and args.treatment and args.outcome:
+        try:
+            result = copilot.estimate_effect(
+                result,
+                treatment=args.treatment,
+                outcome=args.outcome,
+                method=args.method,
+            )
+        except (ValueError, ImportError) as e:
+            print(f"Estimation error: {e}", file=sys.stderr)
+
     if args.output:
         out_path = Path(args.output)
         out_path.write_text(json.dumps(result.to_dict(), indent=2))
         print(f"Result written to {out_path}")
     else:
         print(result.summary)
+        if result.effects:
+            print("\nEffects:")
+            for key, eff in result.effects.items():
+                print(f"  {key}: ATE={eff.ate}, method={eff.method}")
+                if eff.ate_ci:
+                    print(f"    95% CI: [{eff.ate_ci[0]:.4f}, {eff.ate_ci[1]:.4f}]")
         if result.warnings:
             print(f"\nWarnings ({len(result.warnings)}):")
             for w in result.warnings:
@@ -307,6 +325,11 @@ def main(argv=None):
     p_analyze.add_argument("--planner", "-p", default="rule", help="Planner: rule (default)")
     p_analyze.add_argument("--timeout", "-t", type=int, default=300, help="Timeout in seconds (default: 300)")
     p_analyze.add_argument("--seed", "-s", type=int, default=42, help="Random seed (default: 42)")
+    p_analyze.add_argument("--treatment", "-T", help="Treatment variable (enables effect estimation)")
+    p_analyze.add_argument("--outcome", "-Y", help="Outcome variable (enables effect estimation)")
+    p_analyze.add_argument(
+        "--method", "-m", help="Estimation method: linear, matching, dml, drl, metalearner, iv (auto if omitted)"
+    )
 
     # benchmark
     p_bench = sub.add_parser("benchmark", help="Run benchmark evaluation")

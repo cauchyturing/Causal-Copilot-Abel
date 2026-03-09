@@ -519,6 +519,17 @@ def estimate_effect(
     if outcome not in df.columns:
         raise ToolError(f"Outcome '{outcome}' not in data columns: {df.columns.tolist()}")
 
+    # --- Data properties for intelligent method/model selection ---
+    from causal_copilot.mcp.offline import (
+        identify_confounders as _offline_confounders,
+        prepare_treatment,
+        select_estimation_method as _offline_select_method,
+    )
+
+    _, _, _, treatment_kind = prepare_treatment(df, treatment)
+    is_linear = bool(diagnosis.get("linearity", True)) if diagnosis else True
+    is_gaussian = bool(diagnosis.get("gaussian_error", True)) if diagnosis else True
+
     # --- Inference policy (honest gate) ---
     graph_kind = classify_graph_kind(adj)
     warnings_list: list[str] = []
@@ -619,11 +630,24 @@ def estimate_effect(
             raise ToolError(f"Invalid confounders JSON: {e}") from e
         conf_source = "user-specified"
     else:
-        conf_list = _identify_confounders(clean_adj, names, t_idx, o_idx)
+        conf_list, potential_conf = _offline_confounders(clean_adj, names, treatment, outcome)
         conf_source = "auto-detected-from-graph"
+        if potential_conf:
+            warnings_list.append(
+                f"Potential confounders (undirected edges): {', '.join(potential_conf)}"
+            )
 
     # --- Method selection ---
-    selected_method = method if method else _auto_select_method(df, treatment, diagnosis)
+    if method:
+        selected_method = method
+    else:
+        has_iv = bool(instrument) or (_find_instrument(clean_adj, names, t_idx, o_idx) is not None)
+        selected_method = _offline_select_method(
+            df, treatment, treatment_kind,
+            is_linear=is_linear, is_gaussian=is_gaussian,
+            n_features=len(names) - 1,
+            has_instrument=has_iv and treatment_kind == "continuous",
+        )
 
     # --- Run estimation ---
     try:
@@ -676,8 +700,11 @@ def estimate_effect(
                     W_col,
                     control_value,
                     treatment_value,
+                    is_linear=is_linear,
+                    treatment_kind=treatment_kind,
                 )
-            method_detail = "Double Machine Learning (EconML LinearDML)"
+            algo_name = estimates.get("algo", "LinearDML")
+            method_detail = f"Double Machine Learning (EconML {algo_name})"
 
         elif selected_method == "drl":
             X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]
@@ -693,11 +720,15 @@ def estimate_effect(
                     W_col,
                     control_value,
                     treatment_value,
+                    is_linear=is_linear,
+                    treatment_kind=treatment_kind,
                 )
-            method_detail = "Doubly Robust Learning (EconML LinearDRL)"
+            algo_name = estimates.get("algo", "LinearDRL")
+            method_detail = f"Doubly Robust Learning (EconML {algo_name})"
 
         elif selected_method == "metalearner":
             X_col = [c for c in names if c != treatment and c != outcome]
+            learner_type = "t" if is_linear else "x"
             with _pipeline_cwd():
                 estimates = estimate_metalearner(
                     df,
@@ -706,8 +737,10 @@ def estimate_effect(
                     X_col,
                     control_value,
                     treatment_value,
+                    learner=learner_type,
                 )
-            method_detail = "Meta-Learner TLearner (EconML)"
+            algo_name = estimates.get("algo", f"{learner_type.upper()}Learner")
+            method_detail = f"Meta-Learner {algo_name} (EconML)"
 
         elif selected_method == "iv":
             iv_var = instrument
@@ -785,11 +818,18 @@ def estimate_effect(
         "confounders_source": conf_source,
         "graph_kind": graph_kind,
         "interpretation": interpretation,
+        "treatment_kind": treatment_kind,
+        "control_value": control_value,
+        "treatment_value": treatment_value,
         "provenance": {
             "method": selected_method,
+            "algo": estimates.get("algo"),
             "inference_policy": inference_policy,
             "llm_used": False,
             "n_observations": len(df),
+            "treatment_kind": treatment_kind,
+            "is_linear": is_linear,
+            "is_gaussian": is_gaussian,
             "graph_sanitization": {"edges_dropped": len(dropped_edges)},
         },
     }
@@ -1314,15 +1354,13 @@ def discover(
             # 4. Execute
             gs = Programming(args).forward(gs)
 
-            # 5. Postprocess (skip for time-series)
-            is_ts = getattr(gs.statistics, "time_series", False)
-            if not is_ts:
-                try:
-                    from postprocess.judge import Judge
+            # 5. Postprocess (bootstrap stability + KCI pruning + LLM refinement)
+            try:
+                from postprocess.judge import Judge
 
-                    gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
-                except Exception as pp_err:
-                    warnings.append(f"Postprocessing skipped: {pp_err}")
+                gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
+            except Exception as pp_err:
+                warnings.append(f"Postprocessing skipped: {pp_err}")
 
         # 6. Serialize
         node_names = gs.user_data.selected_features
@@ -1650,10 +1688,12 @@ def refute_estimate(
 ) -> str:
     """Test robustness of a causal effect estimate with sensitivity analysis.
 
-    Runs three refutation methods:
+    Runs up to four refutation methods:
     - data_subset: re-estimate on 80% of data
     - random_common_cause: add a random variable as confounder
     - placebo_treatment: permute treatment column
+    - unobserved_common_cause: partial-R2 sensitivity, benchmarked against
+      SHAP top feature (only when common causes exist in graph)
 
     A robust estimate should remain stable across refutations.
 
@@ -1696,6 +1736,23 @@ def refute_estimate(
     clean_adj, _ = _sanitize_for_estimation(adj, names)
     dot_graph = _adj_to_dot(clean_adj, names)
 
+    # Compute confounders + SHAP top feature for sensitivity benchmarking
+    from causal_copilot.mcp.offline import identify_confounders as _offline_confounders
+
+    conf_list, _ = _offline_confounders(clean_adj, names, treatment, outcome)
+
+    shap_top = None
+    try:
+        from causal_copilot.mcp.estimation import compute_feature_importance
+
+        is_linear = bool(diagnosis.get("linearity", True)) if diagnosis else True
+        fi = compute_feature_importance(df, outcome, is_linear=is_linear)
+        top_features = fi.get("top_features", [])
+        if top_features:
+            shap_top = top_features[0]
+    except Exception:
+        pass
+
     try:
         from causal_copilot.mcp.estimation import run_refutation
 
@@ -1707,6 +1764,8 @@ def refute_estimate(
                 outcome,
                 control_value,
                 treatment_value,
+                confounders=conf_list,
+                shap_top_feature=shap_top,
             )
     except Exception as e:
         return json.dumps(

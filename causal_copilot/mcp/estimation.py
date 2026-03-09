@@ -52,15 +52,15 @@ def estimate_linear(
         treatment_value=treatment_value,
         target_units="ate",
     )
-    significance = estimate.estimator.test_significance(
-        data,
-        estimate.value,
-    )
-    p_value = significance["p_value"]
-    if isinstance(p_value, (list, np.ndarray)):
-        p_value = float(p_value[0])
-    else:
-        p_value = float(p_value)
+    try:
+        significance = estimate.test_stat_significance()
+        p_value = significance["p_value"]
+        if isinstance(p_value, (list, np.ndarray)):
+            p_value = float(p_value[0])
+        else:
+            p_value = float(p_value)
+    except (AttributeError, TypeError):
+        p_value = None
 
     return {
         "ate": {
@@ -133,15 +133,24 @@ def estimate_dml(
     W_col: list[str],
     T0: float,
     T1: float,
+    *,
+    is_linear: bool = True,
+    treatment_kind: str = "binary",
+    compute_hte: bool = True,
 ) -> dict:
-    """Estimate ATE/ATT via Double Machine Learning (EconML).
+    """Estimate ATE/ATT/HTE via Double Machine Learning (EconML).
 
-    Uses LinearDML with LinearRegression defaults (no LLM needed).
+    Uses data-driven model selection (offline heuristics, no LLM needed).
     X_col = effect modifiers, W_col = confounders/controls.
     """
     from causal_copilot.mcp.offline import get_default_estimation_config
 
-    config = get_default_estimation_config("dml", data, treatment)
+    config = get_default_estimation_config(
+        "dml", data, treatment,
+        outcome=outcome,
+        is_linear=is_linear,
+        treatment_kind=treatment_kind,
+    )
 
     from causal_copilot.mcp.bridge import make_args, make_global_state
     from causal_inference.DML.hte_program import HTE_Programming
@@ -150,8 +159,8 @@ def estimate_dml(
     gs.user_data.processed_data = data.copy()
     gs.inference.hte_algo_json = {"name": config["algo"]}
     gs.inference.hte_model_param = {
-        "model_y": config["model_y"],
-        "model_t": config["model_t"],
+        "model_y": config.get("model_y"),
+        "model_t": config.get("model_t"),
     }
     args = make_args()
 
@@ -177,7 +186,7 @@ def estimate_dml(
     ate, ate_lower, ate_upper = programmer.forward(gs, task="ate")
     att, att_lower, att_upper = programmer.forward(gs, task="att")
 
-    return {
+    result = {
         "ate": {
             "estimate": _safe_float(ate),
             "ci_lower": _safe_float(ate_lower),
@@ -190,7 +199,21 @@ def estimate_dml(
             "ci_upper": _safe_float(att_upper),
             "p_value": None,
         },
+        "algo": config["algo"],
     }
+
+    # HTE: per-sample heterogeneous treatment effects
+    if compute_hte:
+        try:
+            hte, hte_lower, hte_upper = programmer.forward(gs, task="hte")
+            hte_arr = np.array(hte).flatten()
+            result["hte"] = hte_arr
+            result["hte_ci_lower"] = np.array(hte_lower).flatten() if hte_lower is not None else None
+            result["hte_ci_upper"] = np.array(hte_upper).flatten() if hte_upper is not None else None
+        except Exception:
+            pass  # HTE not always available
+
+    return result
 
 
 def estimate_drl(
@@ -201,18 +224,26 @@ def estimate_drl(
     W_col: list[str],
     T0: float,
     T1: float,
+    *,
+    is_linear: bool = True,
+    treatment_kind: str = "binary",
+    compute_hte: bool = True,
 ) -> dict:
-    """Estimate ATE/ATT via Doubly Robust Learning (EconML).
+    """Estimate ATE/ATT/HTE via Doubly Robust Learning (EconML).
 
-    Uses LinearDRLearner with LinearRegression defaults (no LLM needed).
-    Calls EconML directly (like estimate_linear calls DoWhy directly)
-    to avoid DataFrame/numpy incompatibilities in upstream wrappers.
+    Uses data-driven model selection. Calls EconML directly to avoid
+    DataFrame/numpy incompatibilities in upstream wrappers.
     """
     from econml.dr import LinearDRLearner
 
     from causal_copilot.mcp.offline import get_default_estimation_config
 
-    config = get_default_estimation_config("drl", data, treatment)
+    config = get_default_estimation_config(
+        "drl", data, treatment,
+        outcome=outcome,
+        is_linear=is_linear,
+        treatment_kind=treatment_kind,
+    )
 
     df = data.copy()
     actual_W = list(W_col)
@@ -226,8 +257,8 @@ def estimate_drl(
     W = df[actual_W].values
 
     model = LinearDRLearner(
-        model_regression=config["model_regression"],
-        model_propensity=config["model_propensity"],
+        model_regression=config.get("model_regression"),
+        model_propensity=config.get("model_propensity"),
         cv=5,
     )
     model.fit(Y, T, X=X, W=W)
@@ -252,7 +283,7 @@ def estimate_drl(
     else:
         att = att_lower = att_upper = None
 
-    return {
+    result = {
         "ate": {
             "estimate": _safe_float(ate),
             "ci_lower": _safe_float(ate_lower),
@@ -265,7 +296,25 @@ def estimate_drl(
             "ci_upper": _safe_float(att_upper),
             "p_value": None,
         },
+        "algo": config["algo"],
     }
+
+    # HTE: per-sample effects
+    if compute_hte:
+        try:
+            hte = model.effect(X, T0=T0, T1=T1)
+            hte_arr = np.array(hte).flatten()
+            result["hte"] = hte_arr
+            try:
+                hte_lb, hte_ub = model.effect_interval(X, T0=T0, T1=T1)
+                result["hte_ci_lower"] = np.array(hte_lb).flatten()
+                result["hte_ci_upper"] = np.array(hte_ub).flatten()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    return result
 
 
 def estimate_metalearner(
@@ -276,12 +325,14 @@ def estimate_metalearner(
     T0: float,
     T1: float,
     learner: str = "t",
+    *,
+    compute_hte: bool = True,
 ) -> dict:
-    """Estimate ATE/ATT via EconML Meta-Learners (S/T/X).
+    """Estimate ATE/ATT/HTE via EconML Meta-Learners (S/T/X).
 
     Binary treatment required. Auto-binarizes if needed.
     learner: "s" (SLearner), "t" (TLearner), "x" (XLearner).
-    Returns dict with 'ate' and 'att' keys.
+    Uses BootstrapInference(n=100), matching the original pipeline.
     """
     from econml.inference import BootstrapInference
     from econml.metalearners import SLearner, TLearner, XLearner
@@ -303,16 +354,20 @@ def estimate_metalearner(
     elif learner == "t":
         model = TLearner(models=LinearRegression())
     elif learner == "x":
-        from sklearn.ensemble import GradientBoostingRegressor
-
+        try:
+            from xgboost import XGBRegressor
+            base_model = XGBRegressor(objective="reg:squarederror", n_estimators=100)
+        except ImportError:
+            from sklearn.ensemble import GradientBoostingRegressor
+            base_model = GradientBoostingRegressor(n_estimators=100)
         model = XLearner(
-            models=GradientBoostingRegressor(n_estimators=100),
+            models=base_model,
             propensity_model=LogisticRegression(max_iter=1000),
         )
     else:
         raise ValueError(f"Unknown learner: '{learner}'. Use 's', 't', or 'x'.")
 
-    model.fit(Y, T, X=X, inference=BootstrapInference(n_bootstrap_samples=50))
+    model.fit(Y, T, X=X, inference=BootstrapInference(n_bootstrap_samples=100))
 
     ate = float(model.ate(X=X, T0=T0, T1=T1))
     try:
@@ -333,7 +388,7 @@ def estimate_metalearner(
     else:
         att = att_lower = att_upper = None
 
-    return {
+    result = {
         "ate": {
             "estimate": _safe_float(ate),
             "ci_lower": _safe_float(ate_lower),
@@ -346,7 +401,24 @@ def estimate_metalearner(
             "ci_upper": _safe_float(att_upper),
             "p_value": None,
         },
+        "algo": f"{learner.upper()}Learner",
     }
+
+    # HTE: per-sample effects
+    if compute_hte:
+        try:
+            hte = model.effect(X, T0=T0, T1=T1)
+            result["hte"] = np.array(hte).flatten()
+            try:
+                hte_lb, hte_ub = model.effect_interval(X, T0=T0, T1=T1)
+                result["hte_ci_lower"] = np.array(hte_lb).flatten()
+                result["hte_ci_upper"] = np.array(hte_ub).flatten()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    return result
 
 
 def estimate_iv(
@@ -408,7 +480,7 @@ def estimate_iv(
     else:
         att = att_lower = att_upper = None
 
-    return {
+    result = {
         "ate": {
             "estimate": _safe_float(ate),
             "ci_lower": _safe_float(ate_lower),
@@ -421,7 +493,24 @@ def estimate_iv(
             "ci_upper": _safe_float(att_upper),
             "p_value": None,
         },
+        "algo": "LinearDRIV",
     }
+
+    # HTE: per-sample effects
+    if X is not None:
+        try:
+            hte = model.effect(X, T0=T0, T1=T1)
+            result["hte"] = np.array(hte).flatten()
+            try:
+                hte_lb, hte_ub = model.effect_interval(X, T0=T0, T1=T1)
+                result["hte_ci_lower"] = np.array(hte_lb).flatten()
+                result["hte_ci_upper"] = np.array(hte_ub).flatten()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    return result
 
 
 # ── Sensitivity / Refutation ─────────────────────────────────────────
@@ -434,11 +523,19 @@ def run_refutation(
     outcome: str,
     control_value: float,
     treatment_value: float,
+    *,
+    confounders: list[str] | None = None,
+    shap_top_feature: str | None = None,
 ) -> dict:
     """Run DoWhy refutation/sensitivity analysis.
 
     Estimates the causal effect via linear regression, then tests robustness
-    with three refutation methods: data subset, random common cause, placebo.
+    with up to four methods:
+    1. data_subset_refuter — stability under subsampling
+    2. random_common_cause — robustness to random confounders
+    3. placebo_treatment_refuter — effect disappears under permutation
+    4. add_unobserved_common_cause — sensitivity to unobserved confounders
+       (only when common causes exist, uses partial-R2 method from original pipeline)
     """
     from dowhy import CausalModel
 
@@ -505,6 +602,25 @@ def run_refutation(
         }
     except Exception as e:
         results["refutations"]["placebo_treatment"] = {"error": str(e)}
+
+    # Unobserved common cause sensitivity (partial-R2, matches original)
+    common_causes = model.get_common_causes()
+    if common_causes:
+        try:
+            benchmark = [shap_top_feature] if shap_top_feature else common_causes[:1]
+            refute = model.refute_estimate(
+                estimand,
+                estimate,
+                method_name="add_unobserved_common_cause",
+                simulation_method="non-parametric-partial-R2",
+                benchmark_common_causes=benchmark,
+                effect_fraction_on_outcome=[1, 2, 3],
+            )
+            results["refutations"]["unobserved_common_cause"] = {
+                "refutation_result": str(refute),
+            }
+        except Exception as e:
+            results["refutations"]["unobserved_common_cause"] = {"error": str(e)}
 
     return results
 

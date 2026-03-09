@@ -39,7 +39,7 @@ mcp = FastMCP(
     instructions="""\
 Causal discovery & inference expert — turns any dataset into a causal graph, estimates effects, and performs causal reasoning.
 
-## Tools (12)
+## Tools (13)
 ### Core Pipeline
 1. **discover** — autonomous pipeline. Handles everything: data diagnosis, algorithm
    selection, hyperparameter tuning, execution, postprocessing. Use for 90% of cases.
@@ -68,9 +68,15 @@ Causal discovery & inference expert — turns any dataset into a causal graph, e
 12. **validate_graph** — graph falsification: test if the discovered causal graph is
     consistent with the data. Uses DoWhy GCM LMC testing.
 
+### Reporting
+13. **generate_report** — generate a comprehensive PDF report from a discovery run.
+    Covers EDA, algorithm selection, graph analysis, bootstrap confidence, and inference.
+    Requires LLM access + LaTeX. Returns PDF path.
+
 ## Workflow
 - **Best**: diagnose_data(csv) → generate domain knowledge from knowledge_prompt →
   discover(csv, domain_knowledge=...) → inspect_graph → estimate_effect
+  → generate_report(run_id) for comprehensive PDF report
   (Use the causal_analysis prompt for the full workflow)
 - Quick: discover(csv) → estimate_effect(run_id, T, Y)
 - Validate: estimate_effect(…) → refute_estimate(run_id, T, Y) for robustness
@@ -293,18 +299,6 @@ def _adj_to_dot(adj: np.ndarray, names: list[str]) -> str:
             if adj[i, j] == 1:  # j→i
                 edges.append(f"{names[j]} -> {names[i]}")
     return "digraph { " + "; ".join(edges) + "; }"
-
-
-def _auto_select_method(data, treatment: str, diagnosis: dict | None) -> str:
-    """Rule-based method selection."""
-    if data[treatment].nunique() <= 2:
-        return "matching"
-    if diagnosis:
-        is_linear = diagnosis.get("linearity", False)
-        is_gaussian = diagnosis.get("gaussian_error", False)
-        if is_linear and is_gaussian:
-            return "linear"
-    return "dml"
 
 
 def _build_interpretation(treatment, outcome, method, estimates, confounders) -> str:
@@ -646,7 +640,7 @@ def estimate_effect(
             raise ToolError(f"Invalid confounders JSON: {e}") from e
         conf_source = "user-specified"
     else:
-        conf_list, potential_conf = _offline_confounders(clean_adj, names, treatment, outcome)
+        conf_list, potential_conf = _offline_confounders(adj, names, treatment, outcome)
         conf_source = "auto-detected-from-graph"
         if potential_conf:
             warnings_list.append(f"Potential confounders (undirected edges): {', '.join(potential_conf)}")
@@ -1193,10 +1187,12 @@ def run_algorithm(
         }
         result = serialize_result(gs, node_names=node_names, provenance=provenance)
 
-        # Save to artifact store (include data for downstream estimate_effect)
+        # Save to artifact store (include data for downstream tools)
         store_payload = dict(result)
         store_payload["_processed_data"] = gs.user_data.processed_data
         store_payload["_statistics"] = gs.statistics
+        store_payload["_global_state"] = gs
+        store_payload["_args"] = args
         run_id = get_store().save(store_payload)
         result["run_id"] = run_id
         result["resources"] = {
@@ -1286,14 +1282,15 @@ def discover(
         args = make_args(query=query, seed=seed)
 
         # Inject domain knowledge — feeds into Filter, Reranker, HP Selector, Judge
+        # Wrap in list: downstream code (Filter, Reranker, Judge, Report) expects
+        # knowledge_docs to be iterable (list), not a plain string.
         if domain_knowledge:
-            gs.user_data.knowledge_docs = domain_knowledge
+            gs.user_data.knowledge_docs = [domain_knowledge]
 
         with _pipeline_cwd():
             # 1. Statistical analysis
             gs = stat_info_collection(gs)
-            stat_text = convert_stat_info_to_text(gs.statistics)
-            _ = stat_text  # available for LLM prompts; unused in offline path
+            gs.statistics.description = convert_stat_info_to_text(gs.statistics)
 
             # 2. Algorithm selection
             used_planner = "user-specified"
@@ -1397,12 +1394,23 @@ def discover(
             gs = Programming(args).forward(gs)
 
             # 5. Postprocess (bootstrap stability + KCI pruning + LLM refinement)
-            try:
-                from postprocess.judge import Judge
+            # Skip Judge for time-series data (main.py deliberately skips
+            # bootstrap+KCI+LLM refinement for lagged graphs)
+            is_ts = getattr(gs.statistics, "time_series", False)
+            if is_ts:
+                # TS: use converted_graph as revised_graph (no refinement)
+                gs.results.revised_graph = gs.results.converted_graph
+                warnings.append(
+                    "Time-series data: graph refinement (bootstrap+KCI+LLM) "
+                    "skipped — not applicable to lagged causal graphs."
+                )
+            else:
+                try:
+                    from postprocess.judge import Judge
 
-                gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
-            except Exception as pp_err:
-                warnings.append(f"Postprocessing skipped: {pp_err}")
+                    gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
+                except Exception as pp_err:
+                    warnings.append(f"Postprocessing skipped: {pp_err}")
 
         # 6. Serialize
         node_names = gs.user_data.selected_features
@@ -1447,10 +1455,12 @@ def discover(
         if warnings:
             result["warnings"] = warnings
 
-        # Save to artifact store (include data for downstream estimate_effect)
+        # Save to artifact store (include data for downstream tools)
         store_payload = dict(result)
         store_payload["_processed_data"] = gs.user_data.processed_data
         store_payload["_statistics"] = gs.statistics
+        store_payload["_global_state"] = gs
+        store_payload["_args"] = args
         run_id = get_store().save(store_payload)
         result["run_id"] = run_id
 
@@ -2381,6 +2391,247 @@ def validate_graph(
     ]
 
     return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+def _prepare_gs_for_report(gs):
+    """Fill in GlobalState fields needed by Report_generation that MCP may not populate.
+
+    Report_generation (report/report_generation.py) was designed for the full
+    main.py pipeline.  The MCP flow is leaner — it may skip LLM-based algorithm
+    selection (using rule-based fallback) and never runs knowledge_info().
+    This function fills gaps with sensible defaults so Report_generation.__init__
+    doesn't crash.
+    """
+    import re as _re
+
+    # meaningful_feature: detect from column names (generic = V0, X1, etc.)
+    if gs.user_data.meaningful_feature is None:
+        generic = _re.compile(r"^[VXvx]\d+$")
+        names = gs.user_data.selected_features or gs.user_data.processed_data.columns.tolist()
+        gs.user_data.meaningful_feature = not all(generic.match(str(f)) for f in names)
+
+    # knowledge_docs_for_user: Report_generation accesses [0]
+    if gs.user_data.knowledge_docs_for_user is None:
+        if gs.user_data.knowledge_docs:
+            gs.user_data.knowledge_docs_for_user = [gs.user_data.knowledge_docs]
+        else:
+            gs.user_data.knowledge_docs_for_user = ["No domain knowledge was provided for this analysis."]
+
+    # statistics.description: convert_stat_info_to_text may not have stored it
+    if gs.statistics.description is None:
+        from preprocess.stat_info_functions import convert_stat_info_to_text
+
+        gs.statistics.description = convert_stat_info_to_text(gs.statistics)
+
+    # algorithm_candidates: Report_generation reads algo_can dict
+    if gs.algorithm.algorithm_candidates is None:
+        algo = gs.algorithm.selected_algorithm or "Unknown"
+        gs.algorithm.algorithm_candidates = {
+            algo: {
+                "description": f"{algo} algorithm",
+                "justification": "Selected based on data characteristics (rule-based)",
+            }
+        }
+
+    # algorithm_arguments_json: Report_generation reads hyperparameter details
+    if gs.algorithm.algorithm_arguments_json is None:
+        raw_args = gs.algorithm.algorithm_arguments or {}
+        hp_dict = {}
+        for k, v in raw_args.items():
+            hp_dict[k] = {
+                "full_name": str(k),
+                "value": str(v),
+                "explanation": "Auto-configured based on data properties",
+            }
+        gs.algorithm.algorithm_arguments_json = {"hyperparameters": hp_dict}
+
+    # select_conversation: Report_generation reads [0]['response']
+    if not gs.logging.select_conversation:
+        algo = gs.algorithm.selected_algorithm or "Unknown"
+        gs.logging.select_conversation = [
+            {"response": (f"Algorithm {algo} was selected based on dataset characteristics (rule-based selection).")}
+        ]
+
+    # argument_conversation: Report_generation reads [0]['response']
+    if not gs.logging.argument_conversation:
+        gs.logging.argument_conversation = [{"response": "Hyperparameters were configured based on data properties."}]
+
+    # global_state_logging: Report_generation iterates this to load per-algo states
+    if not gs.logging.global_state_logging:
+        gs.logging.global_state_logging = [gs.algorithm.selected_algorithm]
+
+    # graph_conversion: ensure dict exists
+    if gs.logging.graph_conversion is None:
+        gs.logging.graph_conversion = {}
+
+    return gs
+
+
+@mcp.tool()
+def generate_report(run_id: str) -> str:
+    """Generate a comprehensive PDF report from a causal discovery run.
+
+    Creates a publication-quality LaTeX PDF covering:
+    - Exploratory data analysis (distributions, correlations)
+    - Algorithm selection rationale and hyperparameters
+    - Causal graph visualizations (initial + refined)
+    - Bootstrap confidence analysis with heatmaps
+    - Graph interpretation (LLM-generated narrative)
+    - Causal inference results (if estimate_effect was run on this run_id)
+    - Conclusion and summary
+
+    Prerequisites:
+    - run_id from discover() or run_algorithm()
+    - LLM access (LLM_PROVIDER env var) for narrative sections
+    - LaTeX/latexmk installed for PDF compilation
+
+    Args:
+        run_id: Run ID from a previous discover() or run_algorithm() call.
+
+    Returns:
+        JSON with status, report_path (PDF location), tex_path, and output_dir.
+        If PDF compilation fails, status is "partial" and tex_path is still usable.
+    """
+    cached = get_store().get(run_id)
+    if not cached:
+        raise ToolError(f"Run ID '{run_id}' not found or expired (1h TTL). Re-run discover() or run_algorithm() first.")
+
+    gs = cached.get("_global_state")
+    if gs is None:
+        raise ToolError(
+            "No GlobalState stored for this run. generate_report requires run_id from discover() or run_algorithm()."
+        )
+
+    args = cached.get("_args")
+    if args is None:
+        args = make_args(query=gs.user_data.initial_query or "")
+
+    # Fill in fields Report_generation needs but MCP may not populate
+    gs = _prepare_gs_for_report(gs)
+
+    report_warnings: list[str] = []
+
+    try:
+        with _pipeline_cwd():
+            # 1. EDA — generates distribution plots, correlation heatmaps
+            try:
+                from preprocess.eda_generation import EDA
+
+                eda = EDA(gs)
+                eda.generate_eda()
+            except Exception as eda_err:
+                report_warnings.append(f"EDA generation skipped: {eda_err}")
+                # Set minimal eda to avoid crashes in report
+                if not hasattr(gs.results, "eda") or gs.results.eda is None:
+                    gs.results.eda = {}
+
+            # 2. Visualizations — graph plots, heatmaps
+            try:
+                from postprocess.visualization import Visualization, convert_to_edges
+
+                my_visual = Visualization(gs)
+                algo_name = gs.algorithm.selected_algorithm
+
+                if gs.statistics.time_series and gs.results.lagged_graph is not None:
+                    converted = gs.results.lagged_graph
+                    pos_est = my_visual.get_pos(converted[0])
+                    for i in range(converted.shape[0]):
+                        my_visual.plot_pdag(
+                            converted[i],
+                            f"{algo_name}_initial_graph_{i}.svg",
+                            pos=pos_est,
+                        )
+                    summary_graph = np.any(converted, axis=0).astype(int)
+                    my_visual.plot_pdag(
+                        summary_graph,
+                        f"{algo_name}_initial_graph_summary.svg",
+                        pos=pos_est,
+                    )
+                else:
+                    pos_est = my_visual.get_pos(gs.results.converted_graph)
+                    my_visual.plot_pdag(
+                        gs.results.converted_graph,
+                        f"{algo_name}_initial_graph.pdf",
+                        pos=pos_est,
+                    )
+
+                # Store layout for background_prompt() potential_relation.pdf
+                gs.results.raw_pos = pos_est
+
+                # Raw edges for report narrative
+                gs.results.raw_edges = convert_to_edges(
+                    algo_name,
+                    gs.user_data.processed_data.columns,
+                    gs.results.converted_graph,
+                )
+
+                # Revised graph visualization
+                if gs.results.revised_graph is not None:
+                    my_visual_rev = Visualization(gs)
+                    my_visual_rev.plot_pdag(
+                        gs.results.revised_graph,
+                        f"{algo_name}_revised_graph.pdf",
+                        pos=pos_est,
+                    )
+                    gs.results.revised_edges = convert_to_edges(
+                        algo_name,
+                        gs.user_data.processed_data.columns,
+                        gs.results.revised_graph,
+                    )
+                    my_visual_rev.boot_heatmap_plot()
+            except Exception as vis_err:
+                report_warnings.append(f"Visualization generation failed: {vis_err}")
+
+            # 3. Graph effect analysis (LLM call — produces narrative)
+            from report.report_generation import Report_generation
+
+            try:
+                report_gen_pre = Report_generation(gs, args)
+                gs.logging.graph_conversion["initial_graph_analysis"] = report_gen_pre.graph_effect_prompts()
+            except Exception as ge_err:
+                report_warnings.append(f"Graph effect analysis failed: {ge_err}")
+                gs.logging.graph_conversion["initial_graph_analysis"] = (
+                    "Graph effect analysis was not available for this run."
+                )
+
+            # 4. Generate full report (12+ LLM calls for narrative sections)
+            report_gen = Report_generation(gs, args)
+            report_tex = report_gen.generation()
+            report_gen.save_report(report_tex)
+
+            # 5. Check output
+            report_path = os.path.join(gs.user_data.output_report_dir, "report.pdf")
+            tex_path = os.path.join(gs.user_data.output_report_dir, "report.tex")
+
+            result: dict[str, Any] = {
+                "output_dir": gs.user_data.output_report_dir,
+                "tex_path": tex_path,
+            }
+
+            if os.path.isfile(report_path):
+                result["status"] = "ok"
+                result["report_path"] = report_path
+            else:
+                result["status"] = "partial"
+                result["error"] = (
+                    "LaTeX compilation failed — report.tex was generated but "
+                    "PDF was not produced. Check latexmk installation."
+                )
+
+            if report_warnings:
+                result["warnings"] = report_warnings
+
+            return json.dumps(result, indent=2)
+
+    except Exception as e:
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Report generation failed: {e}",
+                "output_dir": getattr(gs.user_data, "output_report_dir", None),
+                "warnings": report_warnings,
+            }
+        )
 
 
 # ── MCP Resources ─────────────────────────────────────────────────────

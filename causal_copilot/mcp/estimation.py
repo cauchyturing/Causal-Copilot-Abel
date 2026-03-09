@@ -154,6 +154,11 @@ def estimate_dml(
         treatment_kind=treatment_kind,
     )
 
+    # Guard: CausalForestDML doesn't support continuous treatment well.
+    # Matching inference.py behavior: fall back to LinearDML for continuous.
+    if config["algo"] == "CausalForestDML" and treatment_kind == "continuous":
+        config["algo"] = "LinearDML"
+
     from causal_copilot.mcp.bridge import make_args, make_global_state
     from causal_inference.DML.hte_program import HTE_Programming
 

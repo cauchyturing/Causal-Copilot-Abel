@@ -194,6 +194,8 @@ class CausalCopilot:
         self.planner = planner
         self._last_data: pd.DataFrame | None = None
         self._last_properties: dict | None = None
+        self._last_gs: Any | None = None
+        self._last_args: Any | None = None
 
     def analyze(
         self,
@@ -501,14 +503,19 @@ class CausalCopilot:
                 gs.user_data.processed_data = numeric_df
                 gs.user_data.selected_features = list(numeric_df.columns)
 
-                old_cwd = os.getcwd()
-                os.chdir(str(PIPELINE_ROOT))
-                try:
-                    from postprocess.judge import Judge
+                # Postprocess: skip Judge for time-series data (main.py behavior)
+                is_ts = getattr(gs.statistics, "time_series", False)
+                if is_ts:
+                    gs.results.revised_graph = gs.results.converted_graph
+                else:
+                    old_cwd = os.getcwd()
+                    os.chdir(str(PIPELINE_ROOT))
+                    try:
+                        from postprocess.judge import Judge
 
-                    gs = Judge(gs, _args).forward(gs, "cot_all_relation", 1)
-                finally:
-                    os.chdir(old_cwd)
+                        gs = Judge(gs, _args).forward(gs, "cot_all_relation", 1)
+                    finally:
+                        os.chdir(old_cwd)
 
                 # Use refined graph if available
                 refined = getattr(gs.results, "revised_graph", None)
@@ -573,6 +580,11 @@ class CausalCopilot:
         if n_bidirected:
             edge_parts.append(f"{n_bidirected} bidirected")
         edge_summary = ", ".join(edge_parts)
+
+        # Store GlobalState for generate_report
+        if pipeline_available and gs is not None:
+            self._last_gs = gs
+            self._last_args = _args
 
         return CausalResult(
             status="ok",
@@ -1082,15 +1094,29 @@ class CausalCopilot:
         n_undirected = sum(1 for i in range(n) for j in range(i + 1, n) if adj[i, j] == 2 or adj[j, i] == 2)
         n_bidirected = sum(1 for i in range(n) for j in range(i + 1, n) if adj[i, j] == 3 or adj[j, i] == 3)
 
-        # Inference policy
-        props = self._last_properties or {}
-        is_lg = bool(props.get("likely_linear")) and bool(props.get("likely_gaussian"))
-        policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
-        inference_policy = {
-            "eligibility": policy["allow_inference"],
-            "method": policy.get("method"),
-            "reason": policy["reason"],
-        }
+        # Inference policy — explicit handling per graph kind (matching server.py)
+        if graph_kind == "dag":
+            inference_policy = {
+                "eligibility": True,
+                "method": "standard",
+                "reason": "DAG — all causal effects identifiable",
+            }
+        elif graph_kind == "pag":
+            inference_policy = {
+                "eligibility": False,
+                "method": None,
+                "reason": "PAG — latent confounders possible, effects not identifiable",
+            }
+        else:
+            # CPDAG: check inference policy with data properties
+            props = self._last_properties or {}
+            is_lg = bool(props.get("likely_linear")) and bool(props.get("likely_gaussian"))
+            policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
+            inference_policy = {
+                "eligibility": policy["allow_inference"],
+                "method": policy.get("method"),
+                "reason": policy["reason"],
+            }
 
         output: dict[str, Any] = {
             "graph_kind": graph_kind,
@@ -1114,13 +1140,15 @@ class CausalCopilot:
             t_idx = names.index(treatment)
             o_idx = names.index(outcome)
 
-            # Check directed path
+            # Check directed path and direct connection
             path_exists = _has_directed_path(adj, t_idx, o_idx)
+            directly_connected = bool(adj[o_idx, t_idx] == 1)  # T→O edge
 
             output["query_assessment"] = {
                 "treatment": treatment,
                 "outcome": outcome,
                 "directed_path_exists": path_exists,
+                "directly_connected": directly_connected,
                 "effect_identifiable": inference_policy["eligibility"] and path_exists,
                 "method": inference_policy["method"] if path_exists else None,
             }
@@ -1347,3 +1375,173 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_graph_falsification
 
         return run_graph_falsification(df, dag_adj, names, n_permutations)
+
+    # --- Reporting ---
+
+    def generate_report(
+        self,
+        result: CausalResult,
+        *,
+        data: pd.DataFrame | None = None,
+    ) -> dict[str, Any]:
+        """Generate a comprehensive PDF report from a causal discovery run.
+
+        Creates a publication-quality LaTeX PDF covering:
+        - Exploratory data analysis (distributions, correlations)
+        - Algorithm selection rationale and hyperparameters
+        - Causal graph visualizations (initial + refined)
+        - Bootstrap confidence analysis with heatmaps
+        - Graph interpretation (LLM-generated narrative)
+        - Conclusion and summary
+
+        Prerequisites:
+        - A successful analyze() call (pipeline must have been available)
+        - LLM access (LLM_PROVIDER env var) for narrative sections
+        - LaTeX/latexmk installed for PDF compilation
+
+        Args:
+            result: CausalResult from analyze() with adjacency_matrix.
+            data: DataFrame (uses stored data from analyze() if None).
+
+        Returns:
+            Dict with status, report_path (PDF location), tex_path, and output_dir.
+            If PDF compilation fails, status is "partial" and tex_path is still usable.
+        """
+        import os
+
+        gs = self._last_gs
+        if gs is None:
+            raise ValueError(
+                "No GlobalState available. generate_report requires a prior "
+                "analyze() call with the full pipeline available."
+            )
+
+        args = self._last_args
+        if args is None:
+            from causal_copilot.mcp.bridge import make_args
+
+            args = make_args(query="")
+
+        # Fill in fields Report_generation needs
+        from causal_copilot.mcp.bridge import PIPELINE_ROOT
+
+        old_cwd = os.getcwd()
+        os.chdir(str(PIPELINE_ROOT))
+        try:
+            from causal_copilot.mcp.server import _prepare_gs_for_report
+
+            gs = _prepare_gs_for_report(gs)
+
+            report_warnings: list[str] = []
+
+            # 1. EDA
+            try:
+                from preprocess.eda_generation import EDA
+
+                eda = EDA(gs)
+                eda.generate_eda()
+            except Exception as eda_err:
+                report_warnings.append(f"EDA generation skipped: {eda_err}")
+                if not hasattr(gs.results, "eda") or gs.results.eda is None:
+                    gs.results.eda = {}
+
+            # 2. Visualizations
+            try:
+                from postprocess.visualization import (
+                    Visualization,
+                    convert_to_edges,
+                )
+
+                my_visual = Visualization(gs)
+                algo_name = gs.algorithm.selected_algorithm
+
+                if gs.statistics.time_series and gs.results.lagged_graph is not None:
+                    converted = gs.results.lagged_graph
+                    pos_est = my_visual.get_pos(converted[0])
+                    for i in range(converted.shape[0]):
+                        my_visual.plot_pdag(
+                            converted[i],
+                            f"{algo_name}_initial_graph_{i}.svg",
+                            pos=pos_est,
+                        )
+                    summary_graph = np.any(converted, axis=0).astype(int)
+                    my_visual.plot_pdag(
+                        summary_graph,
+                        f"{algo_name}_initial_graph_summary.svg",
+                        pos=pos_est,
+                    )
+                else:
+                    pos_est = my_visual.get_pos(gs.results.converted_graph)
+                    my_visual.plot_pdag(
+                        gs.results.converted_graph,
+                        f"{algo_name}_initial_graph.pdf",
+                        pos=pos_est,
+                    )
+
+                # Store layout for background_prompt() potential_relation.pdf
+                gs.results.raw_pos = pos_est
+
+                gs.results.raw_edges = convert_to_edges(
+                    algo_name,
+                    gs.user_data.processed_data.columns,
+                    gs.results.converted_graph,
+                )
+
+                if gs.results.revised_graph is not None:
+                    my_visual_rev = Visualization(gs)
+                    my_visual_rev.plot_pdag(
+                        gs.results.revised_graph,
+                        f"{algo_name}_revised_graph.pdf",
+                        pos=pos_est,
+                    )
+                    gs.results.revised_edges = convert_to_edges(
+                        algo_name,
+                        gs.user_data.processed_data.columns,
+                        gs.results.revised_graph,
+                    )
+                    my_visual_rev.boot_heatmap_plot()
+            except Exception as vis_err:
+                report_warnings.append(f"Visualization generation failed: {vis_err}")
+
+            # 3. Graph effect analysis (LLM call)
+            from report.report_generation import Report_generation
+
+            try:
+                report_gen_pre = Report_generation(gs, args)
+                gs.logging.graph_conversion["initial_graph_analysis"] = report_gen_pre.graph_effect_prompts()
+            except Exception as ge_err:
+                report_warnings.append(f"Graph effect analysis failed: {ge_err}")
+                gs.logging.graph_conversion["initial_graph_analysis"] = (
+                    "Graph effect analysis was not available for this run."
+                )
+
+            # 4. Generate full report
+            report_gen = Report_generation(gs, args)
+            report_tex = report_gen.generation()
+            report_gen.save_report(report_tex)
+
+            # 5. Check output
+            report_path = os.path.join(gs.user_data.output_report_dir, "report.pdf")
+            tex_path = os.path.join(gs.user_data.output_report_dir, "report.tex")
+
+            output: dict[str, Any] = {
+                "output_dir": gs.user_data.output_report_dir,
+                "tex_path": tex_path,
+            }
+
+            if os.path.isfile(report_path):
+                output["status"] = "ok"
+                output["report_path"] = report_path
+            else:
+                output["status"] = "partial"
+                output["error"] = (
+                    "LaTeX compilation failed — report.tex was generated but "
+                    "PDF was not produced. Check latexmk installation."
+                )
+
+            if report_warnings:
+                output["warnings"] = report_warnings
+
+            return output
+        finally:
+            os.chdir(old_cwd)

@@ -258,7 +258,7 @@ def select_models_for_method(
         config = {
             "algo": algo,
             "model_regression": _pick_model(is_binary=False),  # outcome model
-            "model_propensity": _pick_model(is_binary=True),   # treatment model
+            "model_propensity": _pick_model(is_binary=True),  # treatment model
         }
         return config
 
@@ -307,8 +307,11 @@ def get_default_estimation_config(
 
     if method == "dml":
         algo = select_dml_variant(
-            data, treatment, treatment_kind,
-            is_linear=is_linear, n_features=n_features,
+            data,
+            treatment,
+            treatment_kind,
+            is_linear=is_linear,
+            n_features=n_features,
         )
     elif method == "drl":
         if not is_linear and treatment_kind in ("binary", "discrete"):
@@ -325,6 +328,10 @@ def get_default_estimation_config(
     outcome_col = outcome or ([c for c in data.columns if c != treatment][0])
 
     return select_models_for_method(
-        method, algo, data, treatment, outcome_col,
+        method,
+        algo,
+        data,
+        treatment,
+        outcome_col,
         is_linear=is_linear,
     )

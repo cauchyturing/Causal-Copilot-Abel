@@ -547,8 +547,12 @@ class TestEstimateEffect:
     def test_linear_estimation(self, dag_result):
         copilot, result = dag_result
         result = copilot.estimate_effect(
-            result, "x", "y", method="linear",
-            control_value=0, treatment_value=1,
+            result,
+            "x",
+            "y",
+            method="linear",
+            control_value=0,
+            treatment_value=1,
         )
         assert "x->y" in result.effects
         eff = result.effects["x->y"]
@@ -589,7 +593,10 @@ class TestEstimateEffect:
     def test_dml_estimation(self, dag_result):
         copilot, result = dag_result
         result = copilot.estimate_effect(
-            result, "x", "y", method="dml",
+            result,
+            "x",
+            "y",
+            method="dml",
         )
         assert "x->y" in result.effects
         eff = result.effects["x->y"]
@@ -643,7 +650,11 @@ class TestEstimateEffect:
 
         copilot._last_data = None  # clear stored data
         result = copilot.estimate_effect(
-            result, "x", "y", data=simple_df, method="linear",
+            result,
+            "x",
+            "y",
+            data=simple_df,
+            method="linear",
         )
         assert "x->y" in result.effects
 
@@ -788,7 +799,11 @@ class TestEstimateCounterfactual:
     def test_counterfactual_specific_row(self, dag_copilot_and_result):
         copilot, result, _ = dag_copilot_and_result
         cf = copilot.estimate_counterfactual(
-            result, "x", "y", intervention_value=0.0, observed_row_index=0,
+            result,
+            "x",
+            "y",
+            intervention_value=0.0,
+            observed_row_index=0,
         )
         assert cf["observed_row_index"] == 0
 
@@ -815,7 +830,11 @@ class TestSimulateIntervention:
     def test_shift_intervention(self, dag_copilot_and_result):
         copilot, result, _ = dag_copilot_and_result
         sim = copilot.simulate_intervention(
-            result, "x", "y", intervention_value=2.0, shift=True,
+            result,
+            "x",
+            "y",
+            intervention_value=2.0,
+            shift=True,
         )
         assert sim["intervention_type"] == "shift"
         assert sim["intervention_value"] == 2.0
@@ -829,7 +848,11 @@ class TestSimulateIntervention:
     def test_atomic_intervention(self, dag_copilot_and_result):
         copilot, result, _ = dag_copilot_and_result
         sim = copilot.simulate_intervention(
-            result, "x", "y", intervention_value=0.0, shift=False,
+            result,
+            "x",
+            "y",
+            intervention_value=0.0,
+            shift=False,
         )
         assert sim["intervention_type"] == "atomic"
 

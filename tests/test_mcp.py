@@ -736,7 +736,6 @@ class TestEstimationMetaLearner:
         assert 2.0 < ate < 4.5, f"ATE should be ~3.0, got {ate}"
         assert "att" in result
 
-
     def test_slearner_basic(self):
         from causal_copilot.mcp.estimation import estimate_metalearner
 

@@ -660,7 +660,10 @@ class CausalCopilot:
 
         # --- Treatment type dispatch (4 cases, matching original) ---
         _, T0, T1, treatment_kind = prepare_treatment(
-            df, treatment, T0=control_value, T1=treatment_value,
+            df,
+            treatment,
+            T0=control_value,
+            T1=treatment_value,
         )
         control_value = T0
         treatment_value = T1
@@ -674,9 +677,7 @@ class CausalCopilot:
             is_lg = is_linear and is_gaussian
             policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
             if not policy["allow_inference"]:
-                result.warnings = warnings_list + [
-                    f"Inference rejected: {policy['reason']}"
-                ]
+                result.warnings = warnings_list + [f"Inference rejected: {policy['reason']}"]
                 result.summary += f" Inference rejected: {policy['reason']}"
                 return result
             warnings_list.append("CPDAG: undirected edges dropped for estimation")
@@ -701,8 +702,7 @@ class CausalCopilot:
         if had_edge and clean_adj[o_idx, t_idx] == 0:
             clean_adj[o_idx, t_idx] = 1
             warnings_list.append(
-                f"Restored {treatment}->{outcome} as directed for estimation "
-                f"(was undirected in CPDAG)"
+                f"Restored {treatment}->{outcome} as directed for estimation (was undirected in CPDAG)"
             )
 
         # --- Determine confounders (full adj matrix type check) ---
@@ -711,14 +711,15 @@ class CausalCopilot:
             potential_conf = []
         else:
             conf_list, potential_conf = identify_confounders(
-                adj, names, treatment, outcome,
+                adj,
+                names,
+                treatment,
+                outcome,
             )
             if potential_conf and not conf_list:
                 # Use potential confounders when no confirmed ones exist
                 conf_list = potential_conf
-                warnings_list.append(
-                    f"Using potential confounders from undirected edges: {conf_list}"
-                )
+                warnings_list.append(f"Using potential confounders from undirected edges: {conf_list}")
 
         # --- Check for IV ---
         has_iv = bool(instrument)
@@ -730,9 +731,7 @@ class CausalCopilot:
                     continue
                 if clean_adj[o_idx, z_idx] == 1:
                     continue
-                has_parents = any(
-                    clean_adj[z_idx, j] == 1 for j in range(n) if j != z_idx
-                )
+                has_parents = any(clean_adj[z_idx, j] == 1 for j in range(n) if j != z_idx)
                 if not has_parents:
                     has_iv = True
                     if not instrument:
@@ -742,7 +741,9 @@ class CausalCopilot:
         # --- Auto-select method (data-driven, replaces LLM Filter) ---
         if method is None:
             selected_method = select_estimation_method(
-                df, treatment, treatment_kind,
+                df,
+                treatment,
+                treatment_kind,
                 is_linear=is_linear,
                 is_gaussian=is_gaussian,
                 n_features=len(names) - 1,
@@ -765,40 +766,52 @@ class CausalCopilot:
             if selected_method == "linear":
                 dot_graph = _adj_to_dot(clean_adj, names)
                 estimates = estimate_linear(
-                    df, dot_graph, treatment, outcome,
-                    control_value, treatment_value,
+                    df,
+                    dot_graph,
+                    treatment,
+                    outcome,
+                    control_value,
+                    treatment_value,
                 )
             elif selected_method == "matching":
-                match_conf = conf_list if conf_list else [
-                    c for c in names if c != treatment and c != outcome
-                ]
+                match_conf = conf_list if conf_list else [c for c in names if c != treatment and c != outcome]
                 estimates = estimate_matching(
-                    df, treatment, outcome, match_conf,
-                    int(control_value), int(treatment_value),
+                    df,
+                    treatment,
+                    outcome,
+                    match_conf,
+                    int(control_value),
+                    int(treatment_value),
                 )
             elif selected_method == "dml":
                 X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]
                 if not X_col:
-                    X_col = conf_list[:] if conf_list else [
-                        c for c in names if c != treatment and c != outcome
-                    ]
+                    X_col = conf_list[:] if conf_list else [c for c in names if c != treatment and c != outcome]
                 W_col = conf_list if conf_list else []
                 estimates = estimate_dml(
-                    df, treatment, outcome, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                     is_linear=is_linear,
                     treatment_kind=treatment_kind,
                 )
             elif selected_method == "drl":
                 X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]
                 if not X_col:
-                    X_col = conf_list[:] if conf_list else [
-                        c for c in names if c != treatment and c != outcome
-                    ]
+                    X_col = conf_list[:] if conf_list else [c for c in names if c != treatment and c != outcome]
                 W_col = conf_list if conf_list else []
                 estimates = estimate_drl(
-                    df, treatment, outcome, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                     is_linear=is_linear,
                     treatment_kind=treatment_kind,
                 )
@@ -807,31 +820,37 @@ class CausalCopilot:
                 # Pick learner variant based on data (matches original)
                 learner = "t" if is_linear else "x"
                 estimates = estimate_metalearner(
-                    df, treatment, outcome, X_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    control_value,
+                    treatment_value,
                     learner=learner,
                 )
             elif selected_method == "iv":
                 if not instrument:
                     raise ValueError(
-                        "No valid instrument found in graph. "
-                        "Provide instrument= or use a different method."
+                        "No valid instrument found in graph. Provide instrument= or use a different method."
                     )
                 X_col = [c for c in names if c not in (treatment, outcome, instrument)]
                 W_col = conf_list if conf_list else []
                 estimates = estimate_iv(
-                    df, treatment, outcome, instrument, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    instrument,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                 )
             else:
                 raise ValueError(
-                    f"Unknown method '{selected_method}'. "
-                    "Use: linear, matching, dml, drl, metalearner, iv."
+                    f"Unknown method '{selected_method}'. Use: linear, matching, dml, drl, metalearner, iv."
                 )
         except ImportError as e:
-            raise ImportError(
-                "Estimation requires inference extras: pip install causal-copilot[inference]"
-            ) from e
+            raise ImportError("Estimation requires inference extras: pip install causal-copilot[inference]") from e
 
         # --- Build TreatmentEffect ---
         ate_info = estimates.get("ate", {})
@@ -961,8 +980,12 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_refutation
 
         return run_refutation(
-            df, dot_graph, treatment, outcome,
-            control_value, treatment_value,
+            df,
+            dot_graph,
+            treatment,
+            outcome,
+            control_value,
+            treatment_value,
             confounders=conf_list,
             shap_top_feature=shap_top,
         )
@@ -1003,11 +1026,7 @@ class CausalCopilot:
         # Orient undirected edges: lower column index → higher column index
         for i in range(n):
             for j in range(i + 1, n):
-                has_undirected = (
-                    (adj[i, j] == 2 or adj[j, i] == 2)
-                    and dag[i, j] == 0
-                    and dag[j, i] == 0
-                )
+                has_undirected = (adj[i, j] == 2 or adj[j, i] == 2) and dag[i, j] == 0 and dag[j, i] == 0
                 if has_undirected:
                     dag[j, i] = 1  # i→j (adj[j,i]=1 means i causes j)
 
@@ -1045,14 +1064,8 @@ class CausalCopilot:
 
         # Edge statistics
         n_directed = int(np.sum(adj == 1))
-        n_undirected = sum(
-            1 for i in range(n) for j in range(i + 1, n)
-            if adj[i, j] == 2 or adj[j, i] == 2
-        )
-        n_bidirected = sum(
-            1 for i in range(n) for j in range(i + 1, n)
-            if adj[i, j] == 3 or adj[j, i] == 3
-        )
+        n_undirected = sum(1 for i in range(n) for j in range(i + 1, n) if adj[i, j] == 2 or adj[j, i] == 2)
+        n_bidirected = sum(1 for i in range(n) for j in range(i + 1, n) if adj[i, j] == 3 or adj[j, i] == 3)
 
         # Inference policy
         props = self._last_properties or {}
@@ -1132,8 +1145,13 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_counterfactual
 
         return run_counterfactual(
-            df, dag_adj, names, treatment, outcome,
-            intervention_value, observed_row_index,
+            df,
+            dag_adj,
+            names,
+            treatment,
+            outcome,
+            intervention_value,
+            observed_row_index,
         )
 
     def simulate_intervention(
@@ -1169,8 +1187,14 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_intervention_simulation
 
         return run_intervention_simulation(
-            df, dag_adj, names, treatment, outcome,
-            intervention_value, shift, n_samples,
+            df,
+            dag_adj,
+            names,
+            treatment,
+            outcome,
+            intervention_value,
+            shift,
+            n_samples,
         )
 
     def attribute_anomaly(
@@ -1202,8 +1226,12 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_anomaly_attribution
 
         return run_anomaly_attribution(
-            df, dag_adj, names, target_node,
-            threshold_percentile, n_samples,
+            df,
+            dag_adj,
+            names,
+            target_node,
+            threshold_percentile,
+            n_samples,
         )
 
     def attribute_distribution_change(
@@ -1240,7 +1268,11 @@ class CausalCopilot:
         from causal_copilot.mcp.estimation import run_distribution_change
 
         return run_distribution_change(
-            df_old, data_new, dag_adj, names, target_node,
+            df_old,
+            data_new,
+            dag_adj,
+            names,
+            target_node,
         )
 
     # --- Analysis & validation ---

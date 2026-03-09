@@ -640,9 +640,7 @@ def estimate_effect(
         conf_list, potential_conf = _offline_confounders(clean_adj, names, treatment, outcome)
         conf_source = "auto-detected-from-graph"
         if potential_conf:
-            warnings_list.append(
-                f"Potential confounders (undirected edges): {', '.join(potential_conf)}"
-            )
+            warnings_list.append(f"Potential confounders (undirected edges): {', '.join(potential_conf)}")
 
     # --- Method selection ---
     if method:
@@ -650,8 +648,11 @@ def estimate_effect(
     else:
         has_iv = bool(instrument) or (_find_instrument(clean_adj, names, t_idx, o_idx) is not None)
         selected_method = _offline_select_method(
-            df, treatment, treatment_kind,
-            is_linear=is_linear, is_gaussian=is_gaussian,
+            df,
+            treatment,
+            treatment_kind,
+            is_linear=is_linear,
+            is_gaussian=is_gaussian,
             n_features=len(names) - 1,
             has_instrument=has_iv and treatment_kind == "continuous",
         )
@@ -736,7 +737,10 @@ def estimate_effect(
         elif selected_method == "metalearner":
             X_col = [c for c in names if c != treatment and c != outcome]
             ml_config = _offline_select_method_config(
-                "metalearner", df, treatment, is_linear=is_linear,
+                "metalearner",
+                df,
+                treatment,
+                is_linear=is_linear,
             )
             learner_type = ml_config.get("learner", "t")
             with _pipeline_cwd():

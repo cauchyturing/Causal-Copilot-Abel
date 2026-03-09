@@ -146,7 +146,9 @@ def estimate_dml(
     from causal_copilot.mcp.offline import get_default_estimation_config
 
     config = get_default_estimation_config(
-        "dml", data, treatment,
+        "dml",
+        data,
+        treatment,
         outcome=outcome,
         is_linear=is_linear,
         treatment_kind=treatment_kind,
@@ -240,7 +242,9 @@ def estimate_drl(
     from causal_copilot.mcp.offline import get_default_estimation_config
 
     config = get_default_estimation_config(
-        "drl", data, treatment,
+        "drl",
+        data,
+        treatment,
         outcome=outcome,
         is_linear=is_linear,
         treatment_kind=treatment_kind,
@@ -372,9 +376,11 @@ def estimate_metalearner(
     elif learner == "x":
         try:
             from xgboost import XGBRegressor
+
             base_model = XGBRegressor(objective="reg:squarederror", n_estimators=100)
         except ImportError:
             from sklearn.ensemble import GradientBoostingRegressor
+
             base_model = GradientBoostingRegressor(n_estimators=100)
         model = XLearner(
             models=base_model,
@@ -382,11 +388,14 @@ def estimate_metalearner(
         )
     elif learner == "da":
         from econml.metalearners import DomainAdaptationLearner
+
         try:
             from xgboost import XGBRegressor
+
             base_model = XGBRegressor(objective="reg:squarederror", n_estimators=100)
         except ImportError:
             from sklearn.ensemble import GradientBoostingRegressor
+
             base_model = GradientBoostingRegressor(n_estimators=100)
         model = DomainAdaptationLearner(
             models=base_model,

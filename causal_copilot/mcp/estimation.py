@@ -10,6 +10,16 @@ import numpy as np
 import pandas as pd
 
 
+def _safe_float(v):
+    """Convert numeric value to float, returning None for None/NaN."""
+    if v is None:
+        return None
+    v = float(v)
+    if np.isnan(v):
+        return None
+    return v
+
+
 def estimate_linear(
     data: pd.DataFrame,
     dot_graph: str,
@@ -157,11 +167,6 @@ def estimate_dml(
     ate, ate_lower, ate_upper = programmer.forward(gs, task="ate")
     att, att_lower, att_upper = programmer.forward(gs, task="att")
 
-    def _safe_float(v):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return None
-        return float(v)
-
     return {
         "ate": {
             "estimate": _safe_float(ate),
@@ -235,11 +240,6 @@ def estimate_drl(
             att_lower = att_upper = None
     else:
         att = att_lower = att_upper = None
-
-    def _safe_float(v):
-        if v is None or (isinstance(v, float) and np.isnan(v)):
-            return None
-        return float(v)
 
     return {
         "ate": {

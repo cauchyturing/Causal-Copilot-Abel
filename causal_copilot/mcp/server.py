@@ -37,27 +37,38 @@ from causal_discovery.pdag_policy import (
 mcp = FastMCP(
     "Causal-Copilot",
     instructions="""\
-Causal discovery & inference expert — turns any dataset into a causal graph and estimates causal effects.
+Causal discovery & inference expert — turns any dataset into a causal graph, estimates effects, and performs causal reasoning.
 
-## Tools (5)
+## Tools (10)
+### Core Pipeline
 1. **discover** — autonomous pipeline. Handles everything: data diagnosis, algorithm
    selection, hyperparameter tuning, execution, postprocessing. Use for 90% of cases.
 2. **inspect_graph** — analyze a causal graph: classify (DAG/CPDAG/PAG), check if
    causal effects are identifiable, assess specific treatment→outcome queries.
-3. **estimate_effect** — estimate the causal effect of treatment on outcome (ATE/ATT
-   with confidence intervals). Requires a causal graph. Checks inference eligibility
-   first — rejects honestly if effects are not identifiable.
-4. **diagnose_data** — get data statistics (linearity, gaussianity, missingness).
-   Expert mode only — discover does this automatically.
-5. **run_algorithm** — run a named algorithm with explicit hyperparameters.
-   Expert mode only — discover selects the best algorithm automatically.
+3. **estimate_effect** — estimate causal effect of treatment on outcome (ATE/ATT with CIs).
+   Methods: linear, matching, dml, drl, metalearner, iv. Checks inference eligibility first.
+4. **diagnose_data** — get data statistics (linearity, gaussianity, missingness). Expert mode.
+5. **run_algorithm** — run a named algorithm with explicit hyperparameters. Expert mode.
+
+### Causal Reasoning
+6. **refute_estimate** — sensitivity analysis: test robustness of a causal effect estimate.
+   Runs 3 refutation methods (data subset, random cause, placebo).
+7. **estimate_counterfactual** — answer "what if?": what would outcome be if treatment
+   were set to a specific value? Uses DoWhy GCM.
+8. **attribute_anomaly** — root cause analysis: which causal parents drive anomalous
+   values of a target variable? Uses DoWhy GCM.
+9. **attribute_distribution_change** — explain distribution shifts: which causal mechanisms
+   changed between two time periods? Uses DoWhy GCM.
+10. **simulate_intervention** — interventional what-if: simulate shifting or setting a
+    treatment value and see the outcome distribution change. Uses DoWhy GCM.
 
 ## Workflow
 - Full: discover(csv) → inspect_graph(run_id, T, Y) → estimate_effect(run_id, T, Y)
 - Quick: discover(csv) → estimate_effect(run_id, T, Y)
+- Validate: estimate_effect(…) → refute_estimate(run_id, T, Y) for robustness
+- What-if: discover(csv) → estimate_counterfactual(run_id, T, Y, value)
+- Root cause: discover(csv) → attribute_anomaly(run_id, target_node)
 - Expert: diagnose_data(csv) → run_algorithm(csv, algo) → estimate_effect(run_id, T, Y)
-- If inspect_graph returns status="needs_more_input", follow its next_step field.
-- If estimate_effect returns status="rejected", follow its next_steps field.
 
 ## Resources (reference material)
 - causal://algorithms — list of all algorithms with descriptions
@@ -72,6 +83,7 @@ Causal discovery & inference expert — turns any dataset into a causal graph an
 - Always check inference_policy before claiming effects are identifiable.
 - estimate_effect checks this automatically — trust its "rejected" status.
 - discover already handles algorithm selection — don't manually select unless asked.
+- GCM tools (counterfactual, anomaly, distribution_change, intervention) require a DAG.
 """,
 )
 
@@ -198,6 +210,90 @@ def _build_interpretation(treatment, outcome, method, estimates, confounders) ->
     return ", ".join(parts) + "."
 
 
+def _resolve_data_and_graph(
+    run_id: str, csv_data: str, adjacency_matrix: str,
+    node_names: str, data_diagnosis: str = "", require_data: bool = True,
+):
+    """Resolve inputs from either run_id or explicit args.
+
+    Returns (df, adj, names, diagnosis) tuple.
+    """
+    adj = None
+    names = None
+    diagnosis = None
+    df = None
+
+    if run_id and csv_data:
+        raise ToolError("run_id and csv_data are mutually exclusive.")
+
+    if run_id:
+        cached = get_store().get(run_id)
+        if cached is None:
+            raise ToolError(f"run_id '{run_id}' not found or expired.")
+        adj = np.array(cached["adjacency_matrix"])
+        names = cached["node_names"]
+        diagnosis = cached.get("data_diagnosis")
+        if require_data:
+            stored_data = cached.get("_processed_data")
+            if stored_data is None:
+                raise ToolError(
+                    f"run_id '{run_id}' has no stored data. "
+                    "Re-run discover or run_algorithm to populate."
+                )
+            df = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
+    elif csv_data:
+        if not adjacency_matrix:
+            raise ToolError("adjacency_matrix required when using csv_data.")
+        if not node_names:
+            raise ToolError("node_names required when using csv_data.")
+        try:
+            df = pd.read_csv(io.StringIO(csv_data))
+        except Exception as e:
+            raise ToolError(f"Failed to parse CSV: {e}")
+        try:
+            adj = np.array(json.loads(adjacency_matrix))
+            names = json.loads(node_names)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise ToolError(f"Invalid JSON: {e}")
+        if data_diagnosis:
+            try:
+                diagnosis = json.loads(data_diagnosis)
+            except json.JSONDecodeError as e:
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
+    else:
+        raise ToolError("Provide either run_id or csv_data + adjacency_matrix + node_names.")
+
+    if adj is not None:
+        if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
+            raise ToolError("Adjacency matrix must be square.")
+        if adj.shape[0] != len(names):
+            raise ToolError(f"Matrix dimension {adj.shape[0]} != {len(names)} node names.")
+
+    return df, adj, names, diagnosis
+
+
+def _find_instrument(adj: np.ndarray, names: list[str], t_idx: int, o_idx: int) -> str | None:
+    """Find a valid instrumental variable from the graph.
+
+    An IV Z must:
+    1. Directly cause T: adj[t_idx, z_idx] == 1
+    2. NOT directly cause O: adj[o_idx, z_idx] != 1
+    3. Have no parents (simplified independence check)
+    """
+    n = adj.shape[0]
+    for z_idx in range(n):
+        if z_idx in (t_idx, o_idx):
+            continue
+        if adj[t_idx, z_idx] != 1:
+            continue
+        if adj[o_idx, z_idx] == 1:
+            continue
+        has_parents = any(adj[z_idx, j] == 1 for j in range(n) if j != z_idx)
+        if not has_parents:
+            return names[z_idx]
+    return None
+
+
 @mcp.tool()
 def estimate_effect(
     treatment: str,
@@ -211,6 +307,7 @@ def estimate_effect(
     treatment_value: float = 1.0,
     confounders: str = "",
     data_diagnosis: str = "",
+    instrument: str = "",
 ) -> str:
     """Estimate the causal effect of treatment on outcome.
 
@@ -228,20 +325,22 @@ def estimate_effect(
         csv_data: CSV string with header row
         adjacency_matrix: JSON 2D array (mat[i][j]=1 means j causes i)
         node_names: JSON array of variable names
-        method: Estimation method ("linear", "matching", "dml", "drl", or "" for auto)
+        method: Estimation method ("linear", "matching", "dml", "drl",
+                "metalearner", "iv", or "" for auto)
         control_value: Reference value for control group (default 0.0)
         treatment_value: Reference value for treatment group (default 1.0)
         confounders: JSON array of confounder names (default: auto-detect from graph)
         data_diagnosis: JSON with linearity/gaussian_error (needed for CPDAG)
+        instrument: Instrument variable name for IV method (auto-detected from graph if empty)
 
     Returns:
         JSON with status, estimates (ATE/ATT with CIs), confounders_used,
         interpretation, provenance, run_id, next_steps
     """
-    valid_methods = {"linear", "matching", "dml", "drl", ""}
+    valid_methods = {"linear", "matching", "dml", "drl", "metalearner", "iv", ""}
     if method not in valid_methods:
         raise ToolError(
-            f"Unknown method '{method}'. Valid: linear, matching, dml, drl (or empty for auto)."
+            f"Unknown method '{method}'. Valid: linear, matching, dml, drl, metalearner, iv (or empty for auto)."
         )
 
     # --- Resolve inputs ---
@@ -410,6 +509,8 @@ def estimate_effect(
             estimate_matching,
             estimate_dml,
             estimate_drl,
+            estimate_metalearner,
+            estimate_iv,
         )
 
         if selected_method == "linear":
@@ -455,6 +556,44 @@ def estimate_effect(
                     control_value, treatment_value,
                 )
             method_detail = "Doubly Robust Learning (EconML LinearDRL)"
+
+        elif selected_method == "metalearner":
+            X_col = [c for c in names if c != treatment and c != outcome]
+            with _pipeline_cwd():
+                estimates = estimate_metalearner(
+                    df, treatment, outcome, X_col,
+                    control_value, treatment_value,
+                )
+            method_detail = "Meta-Learner TLearner (EconML)"
+
+        elif selected_method == "iv":
+            iv_var = instrument
+            if not iv_var:
+                iv_var = _find_instrument(clean_adj, names, t_idx, o_idx)
+            if not iv_var:
+                return json.dumps({
+                    "status": "error",
+                    "treatment": treatment,
+                    "outcome": outcome,
+                    "method": "iv",
+                    "error": "No valid instrument variable found in graph. "
+                             "Provide instrument parameter or use a different method.",
+                    "next_steps": [
+                        "Specify instrument variable explicitly",
+                        "Use method='dml' or method='drl' instead",
+                    ],
+                })
+            if iv_var not in names or iv_var not in df.columns:
+                raise ToolError(f"Instrument '{iv_var}' not in data/graph.")
+            X_col = [c for c in names if c not in (treatment, outcome, iv_var)]
+            W_col = conf_list if conf_list else []
+            with _pipeline_cwd():
+                estimates = estimate_iv(
+                    df, treatment, outcome, iv_var, X_col, W_col,
+                    control_value, treatment_value,
+                )
+            method_detail = f"Instrumental Variables (EconML LinearDRIV, instrument={iv_var})"
+
         else:
             raise ToolError(f"Unknown method '{selected_method}'.")
 
@@ -468,7 +607,7 @@ def estimate_effect(
             "method": selected_method,
             "error": f"Estimation failed: {e}",
             "next_steps": [
-                "Try a different method (linear, matching, dml, drl)",
+                "Try a different method (linear, matching, dml, drl, metalearner, iv)",
                 "Check that treatment and outcome columns contain valid numeric data",
             ],
         })
@@ -501,31 +640,37 @@ def estimate_effect(
     if warnings_list:
         result_payload["warnings"] = warnings_list
 
-    # Save to artifact store
-    est_run_id = get_store().save(result_payload)
-    result_payload["run_id"] = est_run_id
-
     # Resources + next steps
     result_payload["resources"] = {
         "graph_guide": "causal://guides/interpreting-graphs",
     }
-    next_steps = []
+    # Store data/graph in artifact for downstream tools (refute, counterfactual, etc.)
+    store_for_downstream = dict(result_payload)
+    store_for_downstream["_processed_data"] = df
+    store_for_downstream["adjacency_matrix"] = clean_adj.tolist()
+    store_for_downstream["node_names"] = names
+    est_run_id_full = get_store().save(store_for_downstream)
+    # Use the full run_id (with data) so downstream tools can use it
+    result_payload["run_id"] = est_run_id_full
+
+    next_steps = [
+        f"refute_estimate(run_id='{est_run_id_full}', treatment='{treatment}', outcome='{outcome}') "
+        "to test robustness of this estimate",
+    ]
     if selected_method != "dml":
         next_steps.append(
             f"estimate_effect(treatment='{treatment}', outcome='{outcome}', method='dml') "
             "for heterogeneous treatment effects"
         )
-    if selected_method != "linear":
+    if selected_method not in ("metalearner",):
         next_steps.append(
-            f"estimate_effect(treatment='{treatment}', outcome='{outcome}', method='linear') "
-            "for simple linear estimate with p-value"
+            f"estimate_effect(treatment='{treatment}', outcome='{outcome}', method='metalearner') "
+            "for meta-learner CATE estimation"
         )
-    other_outcomes = [n for n in names if n != treatment and n != outcome]
-    if other_outcomes:
-        alt = other_outcomes[0]
-        next_steps.append(
-            f"estimate_effect(treatment='{treatment}', outcome='{alt}') to test another query"
-        )
+    next_steps.append(
+        f"estimate_counterfactual(run_id='{est_run_id_full}', treatment='{treatment}', "
+        f"outcome='{outcome}', intervention_value=...) for 'what if?' analysis"
+    )
     result_payload["next_steps"] = next_steps
 
     return json.dumps(result_payload, indent=2, cls=_NumpyEncoder)
@@ -1168,6 +1313,455 @@ def inspect_graph(
         result["next_steps"] = next_steps
 
     return json.dumps(result, indent=2, cls=_NumpyEncoder)
+
+
+# ── Causal Reasoning Tools ───────────────────────────────────────────
+
+
+@mcp.tool()
+def refute_estimate(
+    treatment: str,
+    outcome: str,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    control_value: float = 0.0,
+    treatment_value: float = 1.0,
+) -> str:
+    """Test robustness of a causal effect estimate with sensitivity analysis.
+
+    Runs three refutation methods:
+    - data_subset: re-estimate on 80% of data
+    - random_common_cause: add a random variable as confounder
+    - placebo_treatment: permute treatment column
+
+    A robust estimate should remain stable across refutations.
+
+    Args:
+        treatment: Treatment variable name
+        outcome: Outcome variable name
+        run_id: Run ID from estimate_effect or discover
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+        control_value: Control group value (default 0.0)
+        treatment_value: Treatment group value (default 1.0)
+
+    Returns:
+        JSON with original_estimate, refutation results, interpretation
+    """
+    df, adj, names, diagnosis = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+    )
+
+    if treatment not in df.columns:
+        raise ToolError(f"Treatment '{treatment}' not in data columns.")
+    if outcome not in df.columns:
+        raise ToolError(f"Outcome '{outcome}' not in data columns.")
+
+    # Check graph kind for honest gate
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind == "pag":
+        return json.dumps({
+            "status": "rejected",
+            "reason": "PAG — effects not identifiable, cannot refute",
+            "graph_kind": "pag",
+        })
+
+    clean_adj, _ = _sanitize_for_estimation(adj, names)
+    dot_graph = _adj_to_dot(clean_adj, names)
+
+    try:
+        from causal_copilot.mcp.estimation import run_refutation
+
+        with _pipeline_cwd():
+            results = run_refutation(
+                df, dot_graph, treatment, outcome,
+                control_value, treatment_value,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Refutation failed: {e}",
+        })
+
+    # Interpret robustness
+    original = results["original_estimate"]
+    robust = True
+    issues = []
+    for name, ref in results["refutations"].items():
+        if "error" in ref:
+            issues.append(f"{name}: failed ({ref['error']})")
+            continue
+        new_eff = ref.get("new_effect")
+        if new_eff is not None and original is not None and original != 0:
+            change_pct = abs(new_eff - original) / abs(original) * 100
+            if change_pct > 20:
+                robust = False
+                issues.append(f"{name}: estimate changed by {change_pct:.1f}%")
+
+    results["status"] = "ok"
+    results["treatment"] = treatment
+    results["outcome"] = outcome
+    results["robust"] = robust
+    if issues:
+        results["robustness_issues"] = issues
+    results["interpretation"] = (
+        f"The causal effect estimate of {treatment} on {outcome} "
+        + ("appears robust across refutation tests."
+           if robust else "shows sensitivity — interpret with caution.")
+    )
+    results["next_steps"] = [
+        "If robust: the estimate is reliable under standard assumptions",
+        "If not robust: consider collecting more data or using stronger identification",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+@mcp.tool()
+def estimate_counterfactual(
+    treatment: str,
+    outcome: str,
+    intervention_value: float,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    observed_row_index: int = -1,
+) -> str:
+    """Answer 'what if?': what would outcome be if treatment were set to a value?
+
+    Uses DoWhy Graphical Causal Model (GCM) for counterfactual reasoning.
+    Requires a DAG (directed acyclic graph).
+
+    Args:
+        treatment: Treatment variable name
+        outcome: Outcome variable name
+        intervention_value: The value to set treatment to in the counterfactual
+        run_id: Run ID from discover/run_algorithm/estimate_effect
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+        observed_row_index: Which data row to counterfactualize (-1 = auto, uses row with min treatment)
+
+    Returns:
+        JSON with observed values, counterfactual values, and causal effect
+    """
+    df, adj, names, _ = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+    )
+
+    if treatment not in names or treatment not in df.columns:
+        raise ToolError(f"Treatment '{treatment}' not in data/graph.")
+    if outcome not in names or outcome not in df.columns:
+        raise ToolError(f"Outcome '{outcome}' not in data/graph.")
+
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind != "dag":
+        clean_adj, _ = _sanitize_for_estimation(adj, names)
+    else:
+        clean_adj = adj
+
+    try:
+        from causal_copilot.mcp.estimation import run_counterfactual
+
+        with _pipeline_cwd():
+            results = run_counterfactual(
+                df, clean_adj, names, treatment, outcome,
+                intervention_value, observed_row_index,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Counterfactual estimation failed: {e}",
+            "next_steps": ["Ensure graph is a DAG", "Check data has no missing values"],
+        })
+
+    obs_y = results["observed"][outcome]
+    cf_y = results["counterfactual"][outcome]
+    effect = results["effect"]
+
+    results["status"] = "ok"
+    results["interpretation"] = (
+        f"If {treatment} were set to {intervention_value} "
+        f"(observed: {results['observed'][treatment]}), "
+        f"{outcome} would change from {obs_y} to {cf_y} "
+        f"(effect: {'+' if effect and effect > 0 else ''}{effect})."
+    )
+    results["next_steps"] = [
+        f"simulate_intervention(treatment='{treatment}', outcome='{outcome}', "
+        f"intervention_value={intervention_value}) for population-level simulation",
+        f"refute_estimate(treatment='{treatment}', outcome='{outcome}') "
+        "to validate the causal model",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+@mcp.tool()
+def attribute_anomaly(
+    target_node: str,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    anomaly_threshold_percentile: float = 95.0,
+    num_samples: int = 5,
+) -> str:
+    """Identify root causes of anomalies in a target variable.
+
+    Uses DoWhy GCM anomaly attribution to determine which parent nodes
+    contribute most to anomalous values. Requires a DAG.
+
+    Args:
+        target_node: Variable whose anomalies to explain
+        run_id: Run ID from discover/run_algorithm
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+        anomaly_threshold_percentile: Percentile above which values are anomalous (default 95)
+        num_samples: Max anomaly samples to analyze (default 5)
+
+    Returns:
+        JSON with attribution scores per parent node, sorted by impact
+    """
+    df, adj, names, _ = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+    )
+
+    if target_node not in names or target_node not in df.columns:
+        raise ToolError(f"Target node '{target_node}' not in data/graph.")
+
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind != "dag":
+        clean_adj, _ = _sanitize_for_estimation(adj, names)
+    else:
+        clean_adj = adj
+
+    try:
+        from causal_copilot.mcp.estimation import run_anomaly_attribution
+
+        with _pipeline_cwd():
+            results = run_anomaly_attribution(
+                df, clean_adj, names, target_node,
+                anomaly_threshold_percentile, num_samples,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Anomaly attribution failed: {e}",
+            "next_steps": [
+                "Ensure target_node has parent nodes in the graph",
+                "Ensure graph is a DAG",
+            ],
+        })
+
+    results["status"] = "ok"
+
+    # Build interpretation
+    top_causes = []
+    for node, scores in results.get("attributions", {}).items():
+        ms = scores.get("mean_score")
+        if ms is not None and abs(ms) > 0.01:
+            top_causes.append(f"{node} (score={ms:.3f})")
+    if top_causes:
+        results["interpretation"] = (
+            f"Top root causes of anomalies in {target_node}: "
+            + ", ".join(top_causes[:5])
+        )
+    else:
+        results["interpretation"] = (
+            f"No strong anomaly drivers found for {target_node}."
+        )
+
+    results["next_steps"] = [
+        f"estimate_effect(treatment='<top_cause>', outcome='{target_node}') "
+        "to quantify the causal effect",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+@mcp.tool()
+def attribute_distribution_change(
+    target_node: str,
+    csv_data_new: str,
+    run_id: str = "",
+    csv_data_old: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+) -> str:
+    """Explain why a variable's distribution changed between two time periods.
+
+    Uses DoWhy GCM distribution_change to identify which causal mechanisms shifted.
+    Requires a DAG.
+
+    Two input modes:
+    1. run_id + csv_data_new: old data + graph from run_id, new data from csv
+    2. csv_data_old + csv_data_new + adjacency_matrix + node_names
+
+    Args:
+        target_node: Variable whose distribution change to explain
+        csv_data_new: CSV string of the new/current data
+        run_id: Run ID from discover/run_algorithm (provides old data + graph)
+        csv_data_old: CSV string of old/baseline data (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data_old)
+        node_names: JSON array of variable names (needed with csv_data_old)
+
+    Returns:
+        JSON with attribution scores per node showing which mechanisms changed
+    """
+    try:
+        df_new = pd.read_csv(io.StringIO(csv_data_new))
+    except Exception as e:
+        raise ToolError(f"Failed to parse csv_data_new: {e}")
+
+    if run_id:
+        cached = get_store().get(run_id)
+        if cached is None:
+            raise ToolError(f"run_id '{run_id}' not found or expired.")
+        adj = np.array(cached["adjacency_matrix"])
+        names = cached["node_names"]
+        stored_data = cached.get("_processed_data")
+        if stored_data is None:
+            raise ToolError(f"run_id '{run_id}' has no stored data.")
+        df_old = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
+    elif csv_data_old:
+        if not adjacency_matrix or not node_names:
+            raise ToolError("adjacency_matrix and node_names required with csv_data_old.")
+        try:
+            df_old = pd.read_csv(io.StringIO(csv_data_old))
+            adj = np.array(json.loads(adjacency_matrix))
+            names = json.loads(node_names)
+        except Exception as e:
+            raise ToolError(f"Invalid input: {e}")
+    else:
+        raise ToolError("Provide either run_id or csv_data_old + adjacency_matrix + node_names.")
+
+    if target_node not in names:
+        raise ToolError(f"Target node '{target_node}' not in node_names.")
+
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind != "dag":
+        clean_adj, _ = _sanitize_for_estimation(adj, names)
+    else:
+        clean_adj = adj
+
+    try:
+        from causal_copilot.mcp.estimation import run_distribution_change
+
+        with _pipeline_cwd():
+            results = run_distribution_change(
+                df_old, df_new, clean_adj, names, target_node,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Distribution change attribution failed: {e}",
+            "next_steps": [
+                "Ensure both datasets have the same columns",
+                "Ensure graph is a DAG",
+            ],
+        })
+
+    results["status"] = "ok"
+
+    top_changes = []
+    for node, score in results.get("attributions", {}).items():
+        if score is not None and abs(score) > 0.01:
+            top_changes.append(f"{node} ({score:+.3f})")
+    results["interpretation"] = (
+        f"Distribution of {target_node} changed. Top mechanism shifts: "
+        + (", ".join(top_changes[:5]) if top_changes else "no significant shifts detected")
+    )
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+@mcp.tool()
+def simulate_intervention(
+    treatment: str,
+    outcome: str,
+    intervention_value: float = 1.0,
+    shift: bool = True,
+    num_samples: int = 1000,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+) -> str:
+    """Simulate an intervention: what happens if we manipulate treatment?
+
+    Uses DoWhy GCM interventional sampling. Requires a DAG.
+
+    Two modes:
+    - shift=True (default): treatment += intervention_value (e.g., +1.0)
+    - shift=False: treatment := intervention_value (atomic, e.g., set to 5.0)
+
+    Args:
+        treatment: Treatment variable name
+        outcome: Outcome variable name
+        intervention_value: Value to shift/set treatment to (default 1.0)
+        shift: If true, add value to treatment; if false, set treatment to value
+        num_samples: Number of samples to draw (default 1000)
+        run_id: Run ID from discover/run_algorithm
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+
+    Returns:
+        JSON with original and intervention outcome distributions, mean change
+    """
+    df, adj, names, _ = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+    )
+
+    if treatment not in names or treatment not in df.columns:
+        raise ToolError(f"Treatment '{treatment}' not in data/graph.")
+    if outcome not in names or outcome not in df.columns:
+        raise ToolError(f"Outcome '{outcome}' not in data/graph.")
+
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind != "dag":
+        clean_adj, _ = _sanitize_for_estimation(adj, names)
+    else:
+        clean_adj = adj
+
+    try:
+        from causal_copilot.mcp.estimation import run_intervention_simulation
+
+        with _pipeline_cwd():
+            results = run_intervention_simulation(
+                df, clean_adj, names, treatment, outcome,
+                intervention_value, shift, num_samples,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Intervention simulation failed: {e}",
+            "next_steps": ["Ensure graph is a DAG"],
+        })
+
+    results["status"] = "ok"
+
+    orig_mean = results["original_distribution"]["mean"]
+    intv_mean = results["intervention_distribution"]["mean"]
+    change = results["mean_change"]
+    mode = "shifting" if shift else "setting"
+    results["interpretation"] = (
+        f"Simulating {mode} {treatment} by {intervention_value}: "
+        f"{outcome} mean changes from {orig_mean:.4f} to {intv_mean:.4f} "
+        f"(change: {change:+.4f})."
+    )
+
+    results["next_steps"] = [
+        f"estimate_effect(treatment='{treatment}', outcome='{outcome}') "
+        "for formal causal effect estimate with confidence intervals",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
 
 
 # ── MCP Resources ─────────────────────────────────────────────────────

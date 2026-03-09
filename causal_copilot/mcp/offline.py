@@ -77,5 +77,15 @@ def get_default_estimation_config(method: str, data, treatment: str) -> dict:
             "model_propensity": (LogisticRegressionCV(max_iter=1000)
                                  if binary else LinearRegression()),
         }
+    elif method == "metalearner":
+        return {
+            "algo": "TLearner",
+            "model": LinearRegression(),
+            "learner": "t",
+        }
+    elif method == "iv":
+        return {
+            "algo": "LinearDRIV",
+        }
     else:
         raise ValueError(f"Unknown estimation method: {method}")

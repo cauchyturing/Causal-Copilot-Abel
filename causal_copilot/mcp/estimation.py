@@ -20,6 +20,9 @@ def _safe_float(v):
     return v
 
 
+# ── Treatment Effect Estimation ──────────────────────────────────────
+
+
 def estimate_linear(
     data: pd.DataFrame,
     dot_graph: str,
@@ -254,4 +257,473 @@ def estimate_drl(
             "ci_upper": _safe_float(att_upper),
             "p_value": None,
         },
+    }
+
+
+def estimate_metalearner(
+    data: pd.DataFrame,
+    treatment: str,
+    outcome: str,
+    X_col: list[str],
+    T0: float,
+    T1: float,
+    learner: str = "t",
+) -> dict:
+    """Estimate ATE/ATT via EconML Meta-Learners (S/T/X).
+
+    Binary treatment required. Auto-binarizes if needed.
+    learner: "s" (SLearner), "t" (TLearner), "x" (XLearner).
+    Returns dict with 'ate' and 'att' keys.
+    """
+    from econml.metalearners import SLearner, TLearner, XLearner
+    from econml.inference import BootstrapInference
+    from sklearn.linear_model import LinearRegression, LogisticRegression
+
+    df = data.copy()
+
+    # Ensure binary treatment
+    if df[treatment].nunique() > 2:
+        threshold = df[treatment].median()
+        df[treatment] = (df[treatment] > threshold).astype(int)
+
+    Y = df[outcome].values
+    T = df[treatment].values
+    X = df[X_col].values if X_col else df.drop(columns=[treatment, outcome]).values
+
+    if learner == "s":
+        model = SLearner(overall_model=LinearRegression())
+    elif learner == "t":
+        model = TLearner(models=LinearRegression())
+    elif learner == "x":
+        from sklearn.ensemble import GradientBoostingRegressor
+        model = XLearner(
+            models=GradientBoostingRegressor(n_estimators=100),
+            propensity_model=LogisticRegression(max_iter=1000),
+        )
+    else:
+        raise ValueError(f"Unknown learner: '{learner}'. Use 's', 't', or 'x'.")
+
+    model.fit(Y, T, X=X, inference=BootstrapInference(n_bootstrap_samples=50))
+
+    ate = float(model.ate(X=X, T0=T0, T1=T1))
+    try:
+        ate_lower, ate_upper = model.ate_interval(X=X, T0=T0, T1=T1)
+        ate_lower, ate_upper = float(ate_lower), float(ate_upper)
+    except Exception:
+        ate_lower = ate_upper = None
+
+    treated_mask = np.isclose(T, T1)
+    if treated_mask.sum() > 0:
+        effects = model.effect(X[treated_mask], T0=T0, T1=T1)
+        att = float(np.mean(effects))
+        try:
+            lb, ub = model.effect_interval(X[treated_mask], T0=T0, T1=T1)
+            att_lower, att_upper = float(np.mean(lb)), float(np.mean(ub))
+        except Exception:
+            att_lower = att_upper = None
+    else:
+        att = att_lower = att_upper = None
+
+    return {
+        "ate": {
+            "estimate": _safe_float(ate),
+            "ci_lower": _safe_float(ate_lower),
+            "ci_upper": _safe_float(ate_upper),
+            "p_value": None,
+        },
+        "att": {
+            "estimate": _safe_float(att),
+            "ci_lower": _safe_float(att_lower),
+            "ci_upper": _safe_float(att_upper),
+            "p_value": None,
+        },
+    }
+
+
+def estimate_iv(
+    data: pd.DataFrame,
+    treatment: str,
+    outcome: str,
+    instrument: str,
+    X_col: list[str],
+    W_col: list[str],
+    T0: float,
+    T1: float,
+) -> dict:
+    """Estimate ATE/ATT via Instrumental Variables (EconML LinearDRIV).
+
+    Requires a valid instrument variable that:
+    1. Directly affects treatment
+    2. Only affects outcome through treatment
+    3. Is independent of confounders
+
+    Returns dict with 'ate' and 'att' keys.
+    """
+    from econml.iv.dr import LinearDRIV
+
+    df = data.copy()
+    actual_W = list(W_col)
+    if len(actual_W) == 0:
+        df["_W_dummy"] = 0.0
+        actual_W = ["_W_dummy"]
+
+    Y = df[outcome].values
+    T = df[treatment].values
+    Z = df[[instrument]].values
+    X = df[X_col].values if X_col else None
+    W = df[actual_W].values
+
+    model = LinearDRIV()
+    if X is not None:
+        model.fit(Y, T, X=X, Z=Z, W=W)
+    else:
+        model.fit(Y, T, Z=Z, W=W)
+
+    X_for_pred = X if X is not None else None
+    ate = float(model.ate(X=X_for_pred, T0=T0, T1=T1))
+    try:
+        ate_lower, ate_upper = model.ate_interval(X=X_for_pred, T0=T0, T1=T1)
+        ate_lower, ate_upper = float(ate_lower), float(ate_upper)
+    except Exception:
+        ate_lower = ate_upper = None
+
+    treated_mask = np.isclose(T, T1)
+    if treated_mask.sum() > 0 and X is not None:
+        effects = model.effect(X[treated_mask], T0=T0, T1=T1)
+        att = float(np.mean(effects))
+        try:
+            lb, ub = model.effect_interval(X[treated_mask], T0=T0, T1=T1)
+            att_lower, att_upper = float(np.mean(lb)), float(np.mean(ub))
+        except Exception:
+            att_lower = att_upper = None
+    else:
+        att = att_lower = att_upper = None
+
+    return {
+        "ate": {
+            "estimate": _safe_float(ate),
+            "ci_lower": _safe_float(ate_lower),
+            "ci_upper": _safe_float(ate_upper),
+            "p_value": None,
+        },
+        "att": {
+            "estimate": _safe_float(att),
+            "ci_lower": _safe_float(att_lower),
+            "ci_upper": _safe_float(att_upper),
+            "p_value": None,
+        },
+    }
+
+
+# ── Sensitivity / Refutation ─────────────────────────────────────────
+
+
+def run_refutation(
+    data: pd.DataFrame,
+    dot_graph: str,
+    treatment: str,
+    outcome: str,
+    control_value: float,
+    treatment_value: float,
+) -> dict:
+    """Run DoWhy refutation/sensitivity analysis.
+
+    Estimates the causal effect via linear regression, then tests robustness
+    with three refutation methods: data subset, random common cause, placebo.
+    """
+    from dowhy import CausalModel
+
+    model = CausalModel(
+        data=data, treatment=treatment, outcome=outcome, graph=dot_graph,
+    )
+    estimand = model.identify_effect(proceed_when_unidentifiable=True)
+    estimate = model.estimate_effect(
+        estimand,
+        method_name="backdoor.linear_regression",
+        control_value=control_value,
+        treatment_value=treatment_value,
+        target_units="ate",
+    )
+
+    results = {
+        "original_estimate": _safe_float(estimate.value),
+        "refutations": {},
+    }
+
+    # Data subset refuter
+    try:
+        refute = model.refute_estimate(
+            estimand, estimate,
+            method_name="data_subset_refuter",
+            subset_fraction=0.8,
+        )
+        results["refutations"]["data_subset"] = {
+            "new_effect": _safe_float(refute.new_effect),
+            "refutation_result": str(refute),
+        }
+    except Exception as e:
+        results["refutations"]["data_subset"] = {"error": str(e)}
+
+    # Random common cause
+    try:
+        refute = model.refute_estimate(
+            estimand, estimate,
+            method_name="random_common_cause",
+        )
+        results["refutations"]["random_common_cause"] = {
+            "new_effect": _safe_float(refute.new_effect),
+            "refutation_result": str(refute),
+        }
+    except Exception as e:
+        results["refutations"]["random_common_cause"] = {"error": str(e)}
+
+    # Placebo treatment
+    try:
+        refute = model.refute_estimate(
+            estimand, estimate,
+            method_name="placebo_treatment_refuter",
+            placebo_type="permute",
+        )
+        results["refutations"]["placebo_treatment"] = {
+            "new_effect": _safe_float(refute.new_effect),
+            "refutation_result": str(refute),
+        }
+    except Exception as e:
+        results["refutations"]["placebo_treatment"] = {"error": str(e)}
+
+    return results
+
+
+# ── DoWhy GCM Tools ──────────────────────────────────────────────────
+
+
+def _build_gcm(data: pd.DataFrame, adj: np.ndarray, names: list[str]):
+    """Build a fitted DoWhy GCM (InvertibleStructuralCausalModel).
+
+    Args:
+        data: DataFrame with columns matching names
+        adj: adjacency matrix (adj[i,j]=1 means j->i)
+        names: variable names
+
+    Returns:
+        (scm, G) — fitted model and NetworkX DiGraph
+    """
+    import networkx as nx
+    from dowhy import gcm
+
+    G = nx.DiGraph()
+    G.add_nodes_from(names)
+    n = adj.shape[0]
+    for i in range(n):
+        for j in range(n):
+            if adj[i, j] == 1:
+                G.add_edge(names[j], names[i])
+
+    # Ensure DAG — remove back-edges greedily if cycles exist
+    while not nx.is_directed_acyclic_graph(G):
+        try:
+            cycle = list(next(iter(nx.simple_cycles(G))))
+            G.remove_edge(cycle[-1], cycle[0])
+        except StopIteration:
+            break
+
+    if not nx.is_directed_acyclic_graph(G):
+        raise ValueError("Cannot resolve cycles in graph for GCM model.")
+
+    # Filter data to graph nodes
+    graph_cols = [c for c in names if c in data.columns]
+    df = data[graph_cols].copy()
+
+    scm = gcm.InvertibleStructuralCausalModel(G)
+    gcm.auto.assign_causal_mechanisms(scm, df)
+    gcm.fit(scm, df)
+
+    return scm, G
+
+
+def run_counterfactual(
+    data: pd.DataFrame,
+    adj: np.ndarray,
+    names: list[str],
+    treatment: str,
+    outcome: str,
+    intervention_value: float,
+    observed_row_idx: int = -1,
+) -> dict:
+    """Estimate counterfactual: what would outcome be if treatment were set to value?
+
+    Uses DoWhy GCM counterfactual_samples.
+    observed_row_idx: row to counterfactualize (-1 = row with min treatment).
+    """
+    from dowhy import gcm
+
+    scm, G = _build_gcm(data, adj, names)
+
+    if observed_row_idx < 0:
+        observed_row_idx = int(data[treatment].idxmin())
+
+    observed = data.iloc[[observed_row_idx]].copy().reset_index(drop=True)
+
+    cf_samples = gcm.counterfactual_samples(
+        scm,
+        {treatment: lambda x: intervention_value},
+        observed_data=observed,
+    )
+
+    return {
+        "observed": {
+            treatment: _safe_float(observed[treatment].iloc[0]),
+            outcome: _safe_float(observed[outcome].iloc[0]),
+        },
+        "counterfactual": {
+            treatment: _safe_float(cf_samples[treatment].iloc[0]),
+            outcome: _safe_float(cf_samples[outcome].iloc[0]),
+        },
+        "effect": _safe_float(
+            cf_samples[outcome].iloc[0] - observed[outcome].iloc[0]
+        ),
+        "observed_row_index": observed_row_idx,
+    }
+
+
+def run_anomaly_attribution(
+    data: pd.DataFrame,
+    adj: np.ndarray,
+    names: list[str],
+    target_node: str,
+    threshold_percentile: float = 95.0,
+    n_samples: int = 5,
+) -> dict:
+    """Identify root causes of anomalies via DoWhy GCM.
+
+    Selects anomaly samples (values above threshold_percentile of target)
+    and attributes the anomaly to parent nodes.
+    """
+    from dowhy import gcm
+
+    scm, G = _build_gcm(data, adj, names)
+
+    threshold = data[target_node].quantile(threshold_percentile / 100.0)
+    anomaly_mask = data[target_node] >= threshold
+    if anomaly_mask.sum() == 0:
+        anomaly_samples = data.tail(n_samples)
+    else:
+        anomaly_samples = data[anomaly_mask].head(n_samples)
+
+    attribution = gcm.attribute_anomalies(
+        causal_model=scm,
+        target_node=target_node,
+        anomaly_samples=anomaly_samples,
+    )
+
+    results = {}
+    for node, scores in attribution.items():
+        scores_arr = np.array(scores).flatten()
+        results[node] = {
+            "mean_score": _safe_float(np.mean(scores_arr)),
+            "ci_lower": _safe_float(np.percentile(scores_arr, 2.5)),
+            "ci_upper": _safe_float(np.percentile(scores_arr, 97.5)),
+        }
+
+    # Sort by mean score descending
+    results = dict(
+        sorted(results.items(), key=lambda x: abs(x[1]["mean_score"] or 0), reverse=True)
+    )
+
+    return {
+        "target_node": target_node,
+        "n_anomaly_samples": len(anomaly_samples),
+        "threshold_percentile": threshold_percentile,
+        "attributions": results,
+    }
+
+
+def run_distribution_change(
+    data_old: pd.DataFrame,
+    data_new: pd.DataFrame,
+    adj: np.ndarray,
+    names: list[str],
+    target_node: str,
+) -> dict:
+    """Explain distribution shift via DoWhy GCM distribution_change.
+
+    Identifies which causal mechanisms changed between old and new data.
+    """
+    from dowhy import gcm
+
+    scm, G = _build_gcm(data_old, adj, names)
+
+    attribution = gcm.distribution_change(
+        causal_model=scm,
+        old_data=data_old[names],
+        new_data=data_new[names],
+        target_node=target_node,
+    )
+
+    results = {}
+    for node, score in attribution.items():
+        results[node] = _safe_float(score)
+
+    results = dict(
+        sorted(results.items(), key=lambda x: abs(x[1] or 0), reverse=True)
+    )
+
+    return {
+        "target_node": target_node,
+        "n_old": len(data_old),
+        "n_new": len(data_new),
+        "attributions": results,
+    }
+
+
+def run_intervention_simulation(
+    data: pd.DataFrame,
+    adj: np.ndarray,
+    names: list[str],
+    treatment: str,
+    outcome: str,
+    value: float,
+    shift: bool = True,
+    n_samples: int = 1000,
+) -> dict:
+    """Simulate an intervention via DoWhy GCM interventional_samples.
+
+    shift=True: shift treatment by value (treatment += value).
+    shift=False: set treatment to value (atomic intervention).
+    """
+    from dowhy import gcm
+
+    scm, G = _build_gcm(data, adj, names)
+
+    if shift:
+        intervention_fn = lambda x: x + value  # noqa: E731
+    else:
+        intervention_fn = lambda x: value  # noqa: E731
+
+    samples = gcm.interventional_samples(
+        scm,
+        {treatment: intervention_fn},
+        num_samples_to_draw=n_samples,
+    )
+
+    return {
+        "treatment": treatment,
+        "outcome": outcome,
+        "intervention_type": "shift" if shift else "atomic",
+        "intervention_value": value,
+        "original_distribution": {
+            "mean": _safe_float(data[outcome].mean()),
+            "std": _safe_float(data[outcome].std()),
+            "median": _safe_float(data[outcome].median()),
+            "n": len(data),
+        },
+        "intervention_distribution": {
+            "mean": _safe_float(samples[outcome].mean()),
+            "std": _safe_float(samples[outcome].std()),
+            "median": _safe_float(samples[outcome].median()),
+            "n": n_samples,
+        },
+        "mean_change": _safe_float(
+            samples[outcome].mean() - data[outcome].mean()
+        ),
     }

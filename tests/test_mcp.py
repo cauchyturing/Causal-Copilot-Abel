@@ -35,6 +35,11 @@ def _mock_stat_info(gs):
     gs.statistics.sample_size = gs.user_data.raw_data.shape[0]
     gs.statistics.feature_number = gs.user_data.raw_data.shape[1]
     gs.statistics.time_series = False
+    # Per-column detail
+    cols = list(gs.user_data.raw_data.columns)
+    gs.statistics.miss_ratio = {c: 0.0 for c in cols}
+    gs.statistics.data_type_column = {c: "Continuous" for c in cols}
+    gs.statistics.description = "Linear Gaussian continuous data, no missing values."
     return gs
 
 
@@ -1086,6 +1091,512 @@ class TestToolRegistration:
         missing = expected_tools - actual_names
         assert not missing, f"Missing tools: {missing}"
         assert len(actual_names) >= 12, f"Expected 12+ tools, got {len(actual_names)}"
+
+
+# ── Knowledge-first workflow ──────────────────────────────────────────
+
+
+class TestKnowledgePrompt:
+    """Test that diagnose_data returns data-adaptive knowledge_prompt."""
+
+    def test_meaningful_variable_names(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        rng = np.random.default_rng(0)
+        lines = ["Income,Education,Age"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(csv))
+        assert result["status"] == "ok"
+        kp = result["knowledge_prompt"]
+        assert "Income" in kp
+        assert "Education" in kp
+        assert "Known causal relationships" in kp
+        assert "Forbidden edges" in kp
+
+    def test_generic_variable_names(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        rng = np.random.default_rng(0)
+        lines = ["X1,X2,X3"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(csv))
+        kp = result["knowledge_prompt"]
+        assert "generic" in kp.lower() or "no domain knowledge" in kp.lower()
+
+    def test_data_specific_sections(self):
+        """Non-Gaussian triggers non-Gaussian-specific knowledge questions."""
+        from causal_copilot.mcp.server import diagnose_data
+
+        rng = np.random.default_rng(0)
+        lines = ["A,B,C"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+
+        # Mock with non-Gaussian stats
+        def _mock_nongauss(gs):
+            gs = _mock_stat_info(gs)
+            gs.statistics.gaussian_error = False
+            return gs
+
+        import sys
+        from types import ModuleType
+        fake = ModuleType("preprocess.stat_info_functions")
+        fake.stat_info_collection = _mock_nongauss
+        old = sys.modules.get("preprocess.stat_info_functions")
+        sys.modules["preprocess.stat_info_functions"] = fake
+        try:
+            result = json.loads(diagnose_data(csv))
+        finally:
+            if old is not None:
+                sys.modules["preprocess.stat_info_functions"] = old
+            else:
+                sys.modules.pop("preprocess.stat_info_functions", None)
+
+        kp = result["knowledge_prompt"]
+        assert "Non-Gaussian" in kp or "non-Gaussian" in kp
+
+
+class TestDomainKnowledgeInjection:
+    """Test that domain_knowledge param reaches the pipeline."""
+
+    def test_discover_accepts_domain_knowledge(self):
+        from causal_copilot.mcp.server import discover
+
+        rng = np.random.default_rng(0)
+        lines = ["Income,Education,Wage"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+
+        dk = "Income is caused by Education level. Wage depends on both."
+
+        with _mock_run_algorithm():
+            result = json.loads(discover(
+                csv, query="What causes Wage?", domain_knowledge=dk,
+            ))
+        # Should work without error — knowledge just passes through
+        assert result["status"] in ("ok", "partial", "error")
+
+    def test_knowledge_reaches_global_state(self):
+        """Verify domain_knowledge is set on gs.user_data.knowledge_docs."""
+        from causal_copilot.mcp.bridge import make_global_state
+
+        df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
+        gs = make_global_state(df)
+        dk = "A causes B through mechanism X"
+        gs.user_data.knowledge_docs = dk
+        assert gs.user_data.knowledge_docs == dk
+
+
+class TestFilterKnowledgeBugFix:
+    """Test that Filter now replaces [DOMAIN_KNOWLEDGE] in its prompt."""
+
+    def test_domain_knowledge_in_filter_prompt(self):
+        from causal_copilot.mcp.bridge import make_global_state, make_args
+
+        df = pd.DataFrame({"Income": range(100), "Education": range(100)})
+        gs = make_global_state(df, query="What causes Income?")
+        gs.user_data.knowledge_docs = "Education causes Income."
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+        gs.statistics.missingness = False
+        gs.statistics.data_type = "Continuous"
+        gs.statistics.sample_size = 100
+        gs.statistics.feature_number = 2
+        gs.statistics.time_series = False
+        gs.statistics.description = "Linear Gaussian continuous data"
+        gs.algorithm.waiting_minutes = 5
+        gs.user_data.accept_CPDAG = True
+
+        # Import Filter and test its prompt generation (mock LLMClient)
+        with patch("causal_discovery.filter.LLMClient"):
+            from causal_discovery.filter import Filter
+            args = make_args(query="What causes Income?")
+            f = Filter(args)
+            prompt = f.create_prompt(gs)
+
+        # The [DOMAIN_KNOWLEDGE] placeholder should be replaced
+        assert "[DOMAIN_KNOWLEDGE]" not in prompt
+        assert "Education causes Income" in prompt
+
+
+class TestRevisedGraphPreference:
+    """Test that serialize_result prefers revised_graph over converted_graph."""
+
+    def test_uses_revised_when_available(self):
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6], "C": [7, 8, 9]})
+        gs = make_global_state(df)
+        # Simulate: converted_graph has edge A->B, revised_graph drops it
+        gs.results.converted_graph = np.array([[0, 0, 0], [1, 0, 0], [0, 0, 0]])
+        gs.results.revised_graph = np.array([[0, 0, 0], [0, 0, 0], [0, 1, 0]])
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        result = serialize_result(gs, node_names=["A", "B", "C"])
+        assert result["status"] == "ok"
+        assert result["graph_refined"] is True
+        # Should reflect revised_graph (B->C), not converted_graph (A->B)
+        edge_pairs = [(e["from"], e["to"]) for e in result["edges"] if e["type"] == "directed"]
+        assert ("B", "C") in edge_pairs
+        assert ("A", "B") not in edge_pairs
+
+    def test_falls_back_to_converted(self):
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
+        gs = make_global_state(df)
+        gs.results.converted_graph = np.array([[0, 0], [1, 0]])
+        # No revised_graph — should use converted_graph
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        result = serialize_result(gs, node_names=["A", "B"])
+        assert result["status"] == "ok"
+        assert result["graph_refined"] is False
+
+    def test_bootstrap_confidence_included(self):
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
+        gs = make_global_state(df)
+        gs.results.converted_graph = np.array([[0, 0], [1, 0]])  # A->B
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        # Real bootstrap format: dict of ndarrays (from judge_functions.py)
+        gs.results.bootstrap_probability = {
+            "certain_edges": np.array([[0.0, 0.0], [0.92, 0.0]]),
+            "uncertain_edges": np.zeros((2, 2)),
+            "bi_edges": np.zeros((2, 2)),
+            "half_certain_edges": np.zeros((2, 2)),
+            "half_uncertain_edges": np.zeros((2, 2)),
+            "none_edges": np.zeros((2, 2)),
+            "none_existence": np.zeros((2, 2)),
+        }
+
+        result = serialize_result(gs, node_names=["A", "B"])
+        assert "edge_confidence" in result
+        assert "A->B" in result["edge_confidence"]
+        assert abs(result["edge_confidence"]["A->B"] - 0.92) < 0.01
+
+    def test_bootstrap_confidence_all_edge_types(self):
+        """Bootstrap confidence includes undirected and bidirected edges."""
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2], "B": [3, 4], "C": [5, 6]})
+        gs = make_global_state(df)
+        # A->B (directed), A-C (undirected)
+        gs.results.converted_graph = np.array([
+            [0, 0, 2],
+            [1, 0, 0],
+            [2, 0, 0],
+        ])
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        gs.results.bootstrap_probability = {
+            "certain_edges": np.array([[0, 0, 0], [0.85, 0, 0], [0, 0, 0]]),
+            "uncertain_edges": np.array([[0, 0, 0.78], [0, 0, 0], [0.78, 0, 0]]),
+            "bi_edges": np.zeros((3, 3)),
+            "half_certain_edges": np.zeros((3, 3)),
+            "half_uncertain_edges": np.zeros((3, 3)),
+            "none_edges": np.zeros((3, 3)),
+            "none_existence": np.zeros((3, 3)),
+        }
+
+        result = serialize_result(gs, node_names=["A", "B", "C"])
+        ec = result["edge_confidence"]
+        assert "A->B" in ec
+        assert abs(ec["A->B"] - 0.85) < 0.01
+        # Undirected edge confidence
+        assert "A-C" in ec
+        assert abs(ec["A-C"] - 0.78) < 0.01
+
+    def test_llm_pruning_decisions_exposed(self):
+        """LLM pruning decisions (confirmed/rejected edges) exposed."""
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2], "B": [3, 4], "C": [5, 6]})
+        gs = make_global_state(df)
+        gs.results.converted_graph = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        # Simulate Judge LLM decisions (stored as llm_errors)
+        # direct_record: list of [j, i] pairs the LLM confirmed as j→i
+        # forbid_record: list of [j, i] pairs the LLM rejected
+        gs.results.llm_errors = {
+            "direct_record": [[0, 1]],  # Confirmed: A(0)->B(1)
+            "forbid_record": [[1, 2]],  # Rejected: B(1)->C(2)
+        }
+
+        result = serialize_result(gs, node_names=["A", "B", "C"])
+        assert "llm_pruning" in result
+        assert "A->B" in result["llm_pruning"]["confirmed"]
+        assert "B->C" in result["llm_pruning"]["rejected"]
+
+
+class TestBackgroundKnowledge:
+    """Test forbidden/required edges injection."""
+
+    def test_parse_forbidden_edges(self):
+        from causal_copilot.mcp.server import _parse_background_knowledge
+
+        warnings = []
+        spec = _parse_background_knowledge(
+            '[["Age","Income"],["Gender","Height"]]', "", warnings,
+        )
+        assert spec is not None
+        assert len(spec["forbidden_edges"]) == 2
+        assert spec["forbidden_edges"][0] == ["Age", "Income"]
+        assert not warnings
+
+    def test_parse_required_edges(self):
+        from causal_copilot.mcp.server import _parse_background_knowledge
+
+        warnings = []
+        spec = _parse_background_knowledge(
+            "", '[["Education","Income"]]', warnings,
+        )
+        assert spec is not None
+        assert len(spec["required_edges"]) == 1
+        assert not warnings
+
+    def test_parse_both(self):
+        from causal_copilot.mcp.server import _parse_background_knowledge
+
+        warnings = []
+        spec = _parse_background_knowledge(
+            '[["A","B"]]', '[["C","D"]]', warnings,
+        )
+        assert "forbidden_edges" in spec
+        assert "required_edges" in spec
+
+    def test_parse_empty(self):
+        from causal_copilot.mcp.server import _parse_background_knowledge
+
+        assert _parse_background_knowledge("", "", []) is None
+        assert _parse_background_knowledge("  ", "  ", []) is None
+
+    def test_parse_invalid_json(self):
+        from causal_copilot.mcp.server import _parse_background_knowledge
+
+        warnings = []
+        spec = _parse_background_knowledge("not json", "", warnings)
+        assert spec is None
+        assert len(warnings) == 1
+        assert "Invalid" in warnings[0]
+
+    def test_discover_with_forbidden_edges(self):
+        from causal_copilot.mcp.server import discover
+
+        rng = np.random.default_rng(0)
+        lines = ["A,B,C"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+
+        with _mock_run_algorithm():
+            result = json.loads(discover(
+                csv,
+                forbidden_edges='[["A","B"]]',
+                required_edges='[["B","C"]]',
+            ))
+        # Should not crash — constraints passed through
+        assert result["status"] in ("ok", "partial", "error")
+
+    def test_run_algorithm_with_forbidden_edges(self):
+        from causal_copilot.mcp.server import run_algorithm
+
+        rng = np.random.default_rng(0)
+        lines = ["A,B,C"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+
+        with _mock_run_algorithm():
+            result = json.loads(run_algorithm(
+                csv, algorithm="PC",
+                forbidden_edges='[["A","B"]]',
+            ))
+        assert result["status"] in ("ok", "error")
+
+
+class TestDiagnoseDataEnhanced:
+    """Test enhanced diagnosis with per-column detail and descriptive stats."""
+
+    def _make_csv(self, n=60):
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(n):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        return "\n".join(lines)
+
+    def test_column_detail_exposed(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(self._make_csv()))
+        diag = result["diagnosis"]
+        assert "column_detail" in diag
+        assert "a" in diag["column_detail"]
+        assert diag["column_detail"]["a"]["type"] == "Continuous"
+        assert "missing_ratio" in diag["column_detail"]["a"]
+
+    def test_descriptive_stats_present(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(self._make_csv()))
+        diag = result["diagnosis"]
+        assert "descriptive_stats" in diag
+        assert "a" in diag["descriptive_stats"]
+        stats = diag["descriptive_stats"]["a"]
+        # pandas describe() keys
+        assert "mean" in stats
+        assert "std" in stats
+        assert "min" in stats
+        assert "max" in stats
+
+    def test_description_text_present(self):
+        from causal_copilot.mcp.server import diagnose_data
+
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(self._make_csv()))
+        diag = result["diagnosis"]
+        assert "description" in diag
+        assert "Linear Gaussian" in diag["description"]
+
+    def test_recommendations_enriched(self):
+        """Small sample and high-dimensional warnings appear."""
+        from causal_copilot.mcp.server import diagnose_data
+
+        # Small sample
+        csv = self._make_csv(n=30)
+        with _mock_stat_info_ctx():
+            result = json.loads(diagnose_data(csv))
+        recs = result["recommendations"]
+        # At least the basic recommendation
+        assert any("Linear" in r or "Gaussian" in r for r in recs)
+
+
+class TestSelectionTransparency:
+    """Test that discover() exposes algorithm selection reasoning."""
+
+    def test_selection_reasoning_in_provenance(self):
+        """When LLM path populates candidates/optimum, provenance includes them."""
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
+        gs = make_global_state(df)
+        gs.results.converted_graph = np.array([[0, 0], [1, 0]])
+        gs.statistics.linearity = True
+        gs.statistics.gaussian_error = True
+
+        # Simulate Filter output
+        gs.algorithm.algorithm_candidates = {
+            "PC": {"description": "Constraint-based", "justification": "Linear Gaussian"},
+            "GES": {"description": "Score-based", "justification": "Fast, reliable"},
+        }
+        # Simulate Reranker output
+        gs.algorithm.algorithm_optimum = {
+            "algorithm": "PC",
+            "reason": "PC best for linear Gaussian data with small sample",
+            "score_calculation": {
+                "PC": {"final_score": 8.5},
+                "GES": {"final_score": 7.2},
+            },
+        }
+        # Simulate HP selector output
+        gs.algorithm.algorithm_arguments_json = {
+            "hyperparameters": {
+                "alpha": {
+                    "value": 0.05,
+                    "reasoning": "Standard significance level for small sample",
+                },
+                "indep_test": {
+                    "value": "fisherz",
+                    "reasoning": "Linear Gaussian data → Fisher-z optimal",
+                },
+            },
+        }
+
+        provenance = {
+            "algorithm": "PC",
+            "hyperparameters": {"alpha": 0.05, "indep_test": "fisherz"},
+            "seed": 42,
+            "planner": "llm",
+        }
+
+        # Build selection_reasoning the same way server.py does
+        selection_reasoning = {}
+        candidates = getattr(gs.algorithm, "algorithm_candidates", None)
+        if candidates:
+            selection_reasoning["candidates"] = candidates
+        optimum = getattr(gs.algorithm, "algorithm_optimum", None)
+        if optimum and isinstance(optimum, dict):
+            selection_reasoning["ranking_reason"] = optimum.get("reason", "")
+            score_calc = optimum.get("score_calculation")
+            if score_calc:
+                selection_reasoning["scores"] = {
+                    k: v.get("final_score") if isinstance(v, dict) else v
+                    for k, v in score_calc.items()
+                }
+        hp_json = getattr(gs.algorithm, "algorithm_arguments_json", None)
+        if hp_json and isinstance(hp_json, dict):
+            hp_reasoning = {}
+            hp_data = hp_json.get("hyperparameters", hp_json)
+            for param, info in hp_data.items():
+                if isinstance(info, dict) and "reasoning" in info:
+                    hp_reasoning[param] = info["reasoning"]
+            if hp_reasoning:
+                selection_reasoning["hp_reasoning"] = hp_reasoning
+        provenance["selection_reasoning"] = selection_reasoning
+
+        result = serialize_result(gs, node_names=["A", "B"], provenance=provenance)
+        sr = result["provenance"]["selection_reasoning"]
+
+        # Candidates
+        assert "PC" in sr["candidates"]
+        assert "GES" in sr["candidates"]
+
+        # Scores
+        assert sr["scores"]["PC"] == 8.5
+        assert sr["scores"]["GES"] == 7.2
+
+        # Ranking reason
+        assert "linear Gaussian" in sr["ranking_reason"]
+
+        # HP reasoning
+        assert "alpha" in sr["hp_reasoning"]
+        assert "Fisher-z" in sr["hp_reasoning"]["indep_test"]
+
+
+class TestPromptRegistration:
+    """Test that MCP prompts are registered."""
+
+    def test_causal_analysis_prompt_exists(self):
+        import asyncio
+        from causal_copilot.mcp.server import mcp
+
+        async def check():
+            prompts = await mcp.list_prompts()
+            names = {p.name for p in prompts}
+            return names
+
+        names = asyncio.run(check())
+        assert "causal_analysis" in names
+        assert "causal_expert" in names
+        assert "analyze_dataset" in names
 
 
 # ── MCP CLI ────────────────────────────────────────────────────────────

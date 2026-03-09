@@ -18,17 +18,31 @@ import pandas as pd
 # Pipeline root = project root (two levels up from this file)
 PIPELINE_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Add pipeline modules to sys.path
-_paths = [
-    str(PIPELINE_ROOT),
-    str(PIPELINE_ROOT / "externals"),
-    str(PIPELINE_ROOT / "externals" / "causal-learn"),
-]
-for p in _paths:
-    if p not in sys.path:
-        sys.path.insert(0, p)
 
-# Now pipeline imports work
+def _ensure_pipeline_importable():
+    """Add pipeline modules to sys.path when running from source checkout.
+
+    When pip-installed, all modules are already importable via the wheel.
+    This fallback only activates if global_setting can't be imported normally.
+    """
+    try:
+        import global_setting.state  # noqa: F401
+        return  # Already importable (pip-installed or previously patched)
+    except ImportError:
+        pass
+
+    _paths = [
+        str(PIPELINE_ROOT),
+        str(PIPELINE_ROOT / "externals"),
+        str(PIPELINE_ROOT / "externals" / "causal-learn"),
+    ]
+    for p in _paths:
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+
+_ensure_pipeline_importable()
+
 from global_setting.state import GlobalState  # noqa: E402
 
 
@@ -116,8 +130,16 @@ def adj_to_edges(adj, node_names):
 
 
 def serialize_result(gs, node_names=None, provenance=None):
-    """Serialize GlobalState results to JSON-compatible dict."""
-    adj = gs.results.converted_graph
+    """Serialize GlobalState results to JSON-compatible dict.
+
+    Prefers revised_graph (post-Judge refinement) over converted_graph.
+    Includes bootstrap edge confidence when available.
+    """
+    # Prefer refined graph (post-Judge) over raw converted graph
+    adj = getattr(gs.results, "revised_graph", None)
+    used_revised = adj is not None
+    if adj is None:
+        adj = gs.results.converted_graph
     if adj is None:
         adj = gs.results.raw_result
     if adj is None:
@@ -144,7 +166,62 @@ def serialize_result(gs, node_names=None, provenance=None):
         "n_directed": sum(1 for e in edges if e["type"] == "directed"),
         "n_undirected": sum(1 for e in edges if e["type"] == "undirected"),
         "n_bidirected": sum(1 for e in edges if e["type"] == "bidirected"),
+        "graph_refined": used_revised,
     }
+
+    # Include bootstrap edge confidence when available
+    # bootstrap_probability is a dict of ndarrays:
+    #   certain_edges, uncertain_edges, bi_edges,
+    #   half_certain_edges, half_uncertain_edges, none_edges, none_existence
+    boot_prob = getattr(gs.results, "bootstrap_probability", None)
+    if boot_prob is not None and isinstance(boot_prob, dict):
+        edge_confidence = {}
+        # Map edge types to bootstrap probability layers
+        layer_map = {
+            "directed": "certain_edges",      # j→i
+            "undirected": "uncertain_edges",   # j-i
+            "bidirected": "bi_edges",          # j↔i
+        }
+        for e in edges:
+            etype = e["type"]
+            layer_key = layer_map.get(etype)
+            if layer_key is None:
+                continue
+            prob_mat = boot_prob.get(layer_key)
+            if prob_mat is None:
+                continue
+            src, tgt = e["from"], e["to"]
+            try:
+                si = node_names.index(src)
+                ti = node_names.index(tgt)
+                # mat[i,j] = P(j→i) for directed; symmetric for undirected/bi
+                conf = float(prob_mat[ti, si])
+                arrow = "->" if etype == "directed" else (
+                    "-" if etype == "undirected" else "<->")
+                edge_confidence[f"{src}{arrow}{tgt}"] = round(conf, 3)
+            except (ValueError, IndexError):
+                pass
+        if edge_confidence:
+            result["edge_confidence"] = edge_confidence
+
+    # Include LLM pruning decisions when available (Judge transparency)
+    llm_decisions = getattr(gs.results, "llm_errors", None)
+    if llm_decisions and isinstance(llm_decisions, dict):
+        pruning = {}
+        for key, label in [("direct_record", "confirmed"),
+                           ("forbid_record", "rejected")]:
+            record = llm_decisions.get(key)
+            if record:
+                named = []
+                for pair in record:
+                    try:
+                        j, i = int(pair[0]), int(pair[1])
+                        named.append(f"{node_names[j]}->{node_names[i]}")
+                    except (ValueError, IndexError):
+                        named.append(str(pair))
+                pruning[label] = named
+        if pruning:
+            result["llm_pruning"] = pruning
 
     if provenance:
         result["provenance"] = provenance

@@ -100,8 +100,26 @@ Issues = "https://github.com/cauchyturing/Causal-Copilot/issues"
 [project.scripts]
 causal-copilot = "causal_copilot.cli:main"
 
+[tool.hatch.build]
+exclude = [
+    "externals/causal-learn/",
+    "externals/pyCausalFS/",
+    "externals/pc_adjacency_search/",
+]
+
 [tool.hatch.build.targets.wheel]
-packages = ["causal_copilot"]
+packages = [
+    "causal_copilot",
+    "causal_discovery",
+    "causal_inference",
+    "preprocess",
+    "postprocess",
+    "global_setting",
+    "llm",
+    "report",
+    "user",
+    "externals",
+]
 
 [tool.ruff]
 target-version = "py310"

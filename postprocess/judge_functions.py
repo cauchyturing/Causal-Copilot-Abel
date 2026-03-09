@@ -306,7 +306,7 @@ def call_llm_new(args, prompt, prompt_type):
             llm_answer = call_llm_new(args, prompt, prompt_type)
     return llm_answer
 
-def llm_evaluation_new(data, args, edges_dict, boot_edges_prob, bootstrap_check_dict, prompt_type, vote_num=3):
+def llm_evaluation_new(data, args, edges_dict, boot_edges_prob, bootstrap_check_dict, prompt_type, vote_num=3, knowledge_docs=None):
     """
     Here we let LLM double check the result of initial graph, and make edition (determine direction & delete edge)
     Provided Info:
@@ -397,10 +397,20 @@ def llm_evaluation_new(data, args, edges_dict, boot_edges_prob, bootstrap_check_
         format =  ""
         for node_i, node_j in related_pairs:
             format += f"({node_i}, {node_j}): A or B or C or D: explanations ; \n"
-        replacement = {              
+        # Format domain knowledge for prompt injection
+        if knowledge_docs:
+            if isinstance(knowledge_docs, list):
+                _kd = "\n".join(str(k) for k in knowledge_docs)
+            else:
+                _kd = str(knowledge_docs)
+            knowledge_section = f"\n\n**Domain Knowledge** (use this to inform your causal reasoning):\n{_kd}\n"
+        else:
+            knowledge_section = ""
+
+        replacement = {
             "[COLUMNS]": ', '.join([col for col in data.columns]),
             "[MAIN_NODE]": main_node,
-            "[RELATIONSHIP]": relationship,
+            "[RELATIONSHIP]": relationship + knowledge_section,
             "[TASK]": task
             }
         with open('postprocess/context/pruning_prompt.txt', 'r') as file:

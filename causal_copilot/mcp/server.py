@@ -69,7 +69,9 @@ Causal discovery & inference expert — turns any dataset into a causal graph, e
     consistent with the data. Uses DoWhy GCM LMC testing.
 
 ## Workflow
-- Full: discover(csv) → inspect_graph(run_id, T, Y) → estimate_effect(run_id, T, Y)
+- **Best**: diagnose_data(csv) → generate domain knowledge from knowledge_prompt →
+  discover(csv, domain_knowledge=...) → inspect_graph → estimate_effect
+  (Use the causal_analysis prompt for the full workflow)
 - Quick: discover(csv) → estimate_effect(run_id, T, Y)
 - Validate: estimate_effect(…) → refute_estimate(run_id, T, Y) for robustness
 - Graph check: discover(csv) → validate_graph(run_id) to test graph-data consistency
@@ -128,6 +130,114 @@ def _pipeline_cwd():
             yield
         finally:
             os.chdir(prev)
+
+
+def _build_knowledge_prompt(diagnosis: dict) -> str:
+    """Generate a data-adaptive prompt asking the agent for domain knowledge.
+
+    The prompt focuses on what matters for THIS dataset — not a generic template.
+    The agent generates knowledge from this prompt, then passes it to discover().
+    """
+    features = diagnosis.get("features", [])
+    n_features = len(features)
+    sample_size = diagnosis.get("sample_size", 0)
+
+    # Determine if variable names look meaningful (not just X1, X2, V1, V2)
+    import re
+    generic_pattern = re.compile(r'^[VXvx]\d+$')
+    meaningful_names = not all(generic_pattern.match(str(f)) for f in features)
+
+    sections = []
+    sections.append(
+        f"The dataset has {n_features} variables and {sample_size} observations."
+    )
+
+    if meaningful_names:
+        var_list = ", ".join(str(f) for f in features[:30])
+        if n_features > 30:
+            var_list += f", ... ({n_features - 30} more)"
+        sections.append(
+            f"Variables: {var_list}\n\n"
+            "Based on these variable names, please provide domain knowledge:\n"
+            "1. **Variable descriptions**: What does each variable measure? Units and typical ranges.\n"
+            "2. **Known causal relationships**: Which variables are known causes/effects of others?\n"
+            "3. **Forbidden edges**: Are there pairs where causation is impossible "
+            "(e.g., 'age cannot be caused by income')?\n"
+            "4. **Potential confounders**: What unmeasured variables might confound observed relationships?"
+        )
+    else:
+        sections.append(
+            "Variable names are generic (X1, X2, ...). "
+            "If you know the domain context, describe what each variable represents "
+            "and their expected causal relationships. "
+            "If no domain knowledge is available, say 'No domain knowledge available.'"
+        )
+
+    # Data-specific follow-ups
+    if diagnosis.get("time_series"):
+        sections.append(
+            "**Time-series detected**: What are the expected temporal lags between variables? "
+            "Are there seasonal patterns or regime changes?"
+        )
+    if diagnosis.get("linearity") is False:
+        sections.append(
+            "**Nonlinear relationships detected**: What nonlinear mechanisms might exist? "
+            "Thresholds, saturation effects, interactions?"
+        )
+    if diagnosis.get("gaussian_error") is False:
+        sections.append(
+            "**Non-Gaussian errors detected**: This enables unique DAG identification. "
+            "Are there known asymmetric or heavy-tailed distributions in this domain?"
+        )
+    if diagnosis.get("missingness"):
+        sections.append(
+            "**Missing data detected**: What's the likely mechanism — "
+            "Missing Completely At Random (MCAR), Missing At Random (MAR), "
+            "or Missing Not At Random (MNAR)?"
+        )
+    if sample_size and sample_size < 200:
+        sections.append(
+            f"**Small sample ({sample_size} rows)**: Domain knowledge is especially "
+            "valuable here. Any known structural constraints will improve results."
+        )
+    if n_features > 30:
+        sections.append(
+            f"**High-dimensional ({n_features} variables)**: Are there known variable "
+            "groups or clusters? Which variables are most likely to be causally central?"
+        )
+
+    return "\n\n".join(sections)
+
+
+def _parse_background_knowledge(
+    forbidden_edges: str,
+    required_edges: str,
+    warnings: list[str],
+) -> dict | None:
+    """Parse forbidden/required edges into background_knowledge spec.
+
+    Returns dict compatible with wrapper._create_background_knowledge(),
+    or None if no constraints provided.
+    """
+    spec: dict = {}
+
+    if forbidden_edges and forbidden_edges.strip():
+        try:
+            fe = json.loads(forbidden_edges)
+            if isinstance(fe, list) and fe:
+                spec["forbidden_edges"] = [[str(a), str(b)] for a, b in fe]
+        except (json.JSONDecodeError, ValueError) as e:
+            warnings.append(f"Invalid forbidden_edges JSON: {e}")
+
+    if required_edges and required_edges.strip():
+        try:
+            re_edges = json.loads(required_edges)
+            if isinstance(re_edges, list) and re_edges:
+                spec["required_edges"] = [[str(a), str(b)] for a, b in re_edges]
+        except (json.JSONDecodeError, ValueError) as e:
+            warnings.append(f"Invalid required_edges JSON: {e}")
+
+    return spec if spec else None
 
 
 def _has_directed_path(adj: np.ndarray, src_idx: int, tgt_idx: int) -> bool:
@@ -734,6 +844,63 @@ def diagnose_data(csv_data: str) -> str:
             "features": gs.user_data.selected_features,
         }
 
+        # Per-column detail — gives agents full visibility into each feature
+        column_detail = {}
+        miss_ratio = getattr(stats, "miss_ratio", None)
+        if miss_ratio and isinstance(miss_ratio, dict):
+            for col, ratio in miss_ratio.items():
+                column_detail.setdefault(col, {})["missing_ratio"] = _jsonable(ratio)
+        dtc = getattr(stats, "data_type_column", None)
+        if dtc and isinstance(dtc, dict):
+            for col, dtype in dtc.items():
+                column_detail.setdefault(col, {})["type"] = str(dtype)
+        if column_detail:
+            diagnosis["column_detail"] = column_detail
+
+        # Time-series specific detail
+        if diagnosis.get("time_series"):
+            ts_detail = {}
+            time_lag = getattr(stats, "time_lag", None)
+            if time_lag is not None:
+                ts_detail["estimated_lag"] = _jsonable(time_lag)
+            stationary = getattr(stats, "stationary", None)
+            if stationary is not None:
+                ts_detail["stationary"] = _jsonable(stationary)
+            time_index = getattr(stats, "time_index", None)
+            if time_index is not None:
+                ts_detail["time_index_column"] = str(time_index)
+            if ts_detail:
+                diagnosis["time_series_detail"] = ts_detail
+
+        # Correlation groups (multicollinearity warning)
+        high_corr = getattr(gs.user_data, "high_corr_feature_groups", None)
+        if high_corr and isinstance(high_corr, dict):
+            # Only include groups that actually have correlated partners
+            corr_groups = {
+                k: list(v) if not isinstance(v, list) else v
+                for k, v in high_corr.items()
+                if v
+            }
+            if corr_groups:
+                diagnosis["high_correlation_groups"] = corr_groups
+
+        # Descriptive statistics (EDA summary — numeric only, no images)
+        try:
+            desc = df[gs.user_data.selected_features].describe()
+            desc_dict = {}
+            for col in desc.columns:
+                desc_dict[col] = {
+                    k: round(float(v), 4) for k, v in desc[col].items()
+                }
+            diagnosis["descriptive_stats"] = desc_dict
+        except Exception:
+            pass  # Non-numeric data; skip
+
+        # Natural language summary (from pipeline's own converter)
+        description = getattr(stats, "description", None)
+        if description:
+            diagnosis["description"] = str(description)
+
         # Recommend algorithm families based on diagnosis
         recommendations = []
         if diagnosis.get("time_series"):
@@ -745,10 +912,25 @@ def diagnose_data(csv_data: str) -> str:
         else:
             recommendations.append("Linear + Gaussian → PC or GES (fast, standard)")
 
+        if diagnosis.get("missingness"):
+            recommendations.append("Missing data → use mv_fisherz CI test or MVPC mode")
+
+        n = diagnosis.get("sample_size", 0)
+        p = diagnosis.get("feature_number", 0)
+        if n and p:
+            if n < 100:
+                recommendations.append(f"Small sample ({n} rows) → bootstrap validation critical")
+            if p > 50:
+                recommendations.append(f"High-dimensional ({p} features) → consider FGES or GRaSP")
+
+        # Build data-adaptive knowledge prompt
+        knowledge_prompt = _build_knowledge_prompt(diagnosis)
+
         return json.dumps({
             "status": "ok",
             "diagnosis": diagnosis,
             "recommendations": recommendations,
+            "knowledge_prompt": knowledge_prompt,
             "resources": {
                 "ci_test_guide": "causal://guides/ci-tests",
                 "score_function_guide": "causal://guides/score-functions",
@@ -764,6 +946,8 @@ def run_algorithm(
     csv_data: str,
     algorithm: str,
     hyperparameters: str = "{}",
+    forbidden_edges: str = "",
+    required_edges: str = "",
     seed: int = 42,
     allow_resolver_overrides: bool = True,
 ) -> str:
@@ -775,6 +959,10 @@ def run_algorithm(
         csv_data: CSV string with header row
         algorithm: Algorithm name (e.g., "PC", "GES", "DirectLiNGAM")
         hyperparameters: JSON string of algorithm hyperparameters
+        forbidden_edges: JSON array of [cause, effect] pairs that CANNOT exist.
+            Example: '[["Age","Income"]]'. Supported by PC, FCI, CDNOD.
+        required_edges: JSON array of [cause, effect] pairs that MUST exist.
+            Example: '[["Education","Income"]]'. Supported by PC, FCI, CDNOD.
         seed: Random seed
         allow_resolver_overrides: If true (default), resolvers may override CI test
             and score function based on data characteristics. Set to false to use
@@ -854,6 +1042,26 @@ def run_algorithm(
                         }
                     algo_args["mvpc"] = True
 
+            # Inject structural constraints
+            _ra_warnings: list[str] = []
+            bk_spec = _parse_background_knowledge(
+                forbidden_edges, required_edges, _ra_warnings,
+            )
+            if bk_spec:
+                bk_algos = {"PC", "FCI", "CDNOD", "PCParallel"}
+                if algorithm in bk_algos:
+                    algo_args["background_knowledge"] = bk_spec
+                elif _ra_warnings:
+                    pass  # parse errors already recorded
+                else:
+                    _ra_warnings.append(
+                        f"{algorithm} does not support background_knowledge"
+                    )
+            if _ra_warnings:
+                resolver_adjustments["background_knowledge"] = {
+                    "warnings": _ra_warnings,
+                }
+
             gs.algorithm.algorithm_arguments = algo_args
 
             gs = Programming(args).forward(gs)
@@ -894,6 +1102,9 @@ def run_algorithm(
 def discover(
     csv_data: str,
     query: str = "",
+    domain_knowledge: str = "",
+    forbidden_edges: str = "",
+    required_edges: str = "",
     algorithm: str = "",
     seed: int = 42,
     timeout: int = 300,
@@ -904,16 +1115,32 @@ def discover(
     tunes hyperparameters, executes, and refines the result. This is the primary tool —
     use it when you want the system to handle everything.
 
+    IMPORTANT: Pass domain_knowledge for dramatically better results. Call diagnose_data
+    first — it returns a knowledge_prompt tailored to the dataset. Generate domain
+    knowledge from that prompt and pass it here. This knowledge influences algorithm
+    selection, hyperparameter tuning, AND graph refinement.
+
     Args:
         csv_data: CSV string with header row
         query: Optional causal question (helps LLM select algorithm)
+        domain_knowledge: Domain knowledge about the variables and their relationships.
+            Influences algorithm selection (Filter + Reranker), hyperparameter tuning,
+            and graph refinement (Judge). Get a tailored prompt from diagnose_data's
+            knowledge_prompt field.
+        forbidden_edges: JSON array of [cause, effect] pairs that CANNOT exist.
+            Example: '[["Age","Income"],["Gender","Height"]]'
+            Supported by PC, FCI, CDNOD algorithms. Silently ignored by others.
+        required_edges: JSON array of [cause, effect] pairs that MUST exist.
+            Example: '[["Education","Income"]]'
+            Supported by PC, FCI, CDNOD algorithms. Silently ignored by others.
         algorithm: Optional algorithm override (skips LLM selection)
         seed: Random seed
         timeout: Timeout in seconds
 
     Returns:
-        JSON with adjacency_matrix, edges, graph_kind, identifiability,
-        data_diagnosis, provenance, run_id, warnings
+        JSON with adjacency_matrix, edges, edge_confidence, graph_kind,
+        identifiability, data_diagnosis, provenance, run_id, warnings.
+        graph_refined=true means bootstrap+LLM+KCI refinement was applied.
     """
     # -- Parse & validate ------------------------------------------------
     try:
@@ -941,6 +1168,10 @@ def discover(
 
         gs = make_global_state(df, query=query, algorithm=algorithm or None, seed=seed)
         args = make_args(query=query, seed=seed)
+
+        # Inject domain knowledge — feeds into Filter, Reranker, HP Selector, Judge
+        if domain_knowledge:
+            gs.user_data.knowledge_docs = domain_knowledge
 
         with _pipeline_cwd():
             # 1. Statistical analysis
@@ -1007,6 +1238,21 @@ def discover(
             if algo_name == "PC" and gs.statistics.missingness:
                 algo_args["mvpc"] = True
 
+            # Inject structural constraints (forbidden/required edges)
+            bk_spec = _parse_background_knowledge(
+                forbidden_edges, required_edges, warnings,
+            )
+            if bk_spec:
+                bk_algos = {"PC", "FCI", "CDNOD", "PCParallel"}
+                if algo_name in bk_algos:
+                    algo_args["background_knowledge"] = bk_spec
+                else:
+                    warnings.append(
+                        f"Structural constraints ignored: {algo_name} "
+                        f"does not support background_knowledge. "
+                        f"Supported: {', '.join(sorted(bk_algos))}"
+                    )
+
             gs.algorithm.algorithm_arguments = algo_args
 
             # 4. Execute
@@ -1029,6 +1275,34 @@ def discover(
             "seed": seed,
             "planner": used_planner,
         }
+
+        # Build algorithm selection reasoning (transparency into LLM decisions)
+        selection_reasoning = {}
+        candidates = getattr(gs.algorithm, "algorithm_candidates", None)
+        if candidates:
+            selection_reasoning["candidates"] = candidates
+        optimum = getattr(gs.algorithm, "algorithm_optimum", None)
+        if optimum and isinstance(optimum, dict):
+            selection_reasoning["ranking_reason"] = optimum.get("reason", "")
+            score_calc = optimum.get("score_calculation")
+            if score_calc:
+                # Extract {algo: final_score} for concise view
+                selection_reasoning["scores"] = {
+                    k: v.get("final_score") if isinstance(v, dict) else v
+                    for k, v in score_calc.items()
+                }
+        hp_json = getattr(gs.algorithm, "algorithm_arguments_json", None)
+        if hp_json and isinstance(hp_json, dict):
+            hp_reasoning = {}
+            hp_data = hp_json.get("hyperparameters", hp_json)
+            for param, info in hp_data.items():
+                if isinstance(info, dict) and "reasoning" in info:
+                    hp_reasoning[param] = info["reasoning"]
+            if hp_reasoning:
+                selection_reasoning["hp_reasoning"] = hp_reasoning
+        if selection_reasoning:
+            provenance["selection_reasoning"] = selection_reasoning
+
         result = serialize_result(gs, node_names=node_names, provenance=provenance)
 
         # Enrich with human-ready summary (deterministic, no LLM call)
@@ -1982,3 +2256,14 @@ def causal_expert():
 def analyze_dataset():
     """Step-by-step workflow for analyzing a dataset."""
     return PROMPTS["analyze-dataset"]
+
+
+@mcp.prompt()
+def causal_analysis():
+    """Complete knowledge-first causal analysis workflow.
+
+    Use this for the best results: diagnose → generate domain knowledge →
+    discover with knowledge → interpret → deepen. Your domain knowledge
+    directly influences algorithm selection and graph refinement.
+    """
+    return PROMPTS["causal-analysis"]

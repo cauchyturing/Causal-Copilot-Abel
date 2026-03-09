@@ -1,4 +1,7 @@
-from .llm_client import LLMClient
+try:
+    from .llm_client import LLMClient
+except ImportError:
+    LLMClient = None
 
 try:
     from .ollama_client import OllamaClient

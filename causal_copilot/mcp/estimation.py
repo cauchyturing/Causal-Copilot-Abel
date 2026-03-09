@@ -676,6 +676,109 @@ def run_distribution_change(
     }
 
 
+def compute_feature_importance(
+    data: pd.DataFrame,
+    target_node: str,
+    is_linear: bool = True,
+) -> dict:
+    """Compute SHAP-based feature importance for a target variable.
+
+    Uses linear model SHAP for linear data, tree SHAP for nonlinear.
+    Returns dict mapping feature names to mean absolute SHAP values.
+    """
+    import shap
+    from sklearn.linear_model import LinearRegression
+    from sklearn.ensemble import RandomForestRegressor
+
+    X = data.drop(columns=[target_node])
+    y = data[[target_node]]
+
+    if is_linear:
+        model = LinearRegression()
+        model.fit(X, y)
+        background = shap.utils.sample(X, min(int(len(X) * 0.2), 100))
+        explainer = shap.Explainer(model.predict, background)
+        shap_values = explainer(X)
+    else:
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+        model.fit(X, y.values.ravel())
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer(X)
+
+    shap_df = pd.DataFrame(np.abs(shap_values.values), columns=X.columns)
+    mean_shap = shap_df.mean().sort_values(ascending=False)
+
+    return {
+        "target_node": target_node,
+        "method": "linear_shap" if is_linear else "tree_shap",
+        "feature_importance": {
+            col: _safe_float(val) for col, val in mean_shap.items()
+        },
+        "top_features": list(mean_shap.head(10).index),
+    }
+
+
+def run_graph_falsification(
+    data: pd.DataFrame,
+    adj: np.ndarray,
+    names: list[str],
+    n_permutations: int = 20,
+) -> dict:
+    """Test if a causal graph is consistent with data via DoWhy GCM falsification.
+
+    Checks Local Markov Condition (LMC) violations. Returns test summary.
+    """
+    import networkx as nx
+    from dowhy.gcm.falsify import falsify_graph
+
+    G = nx.DiGraph()
+    G.add_nodes_from(names)
+    n = adj.shape[0]
+    for i in range(n):
+        for j in range(n):
+            if adj[i, j] == 1:
+                G.add_edge(names[j], names[i])
+
+    # Ensure DAG
+    while not nx.is_directed_acyclic_graph(G):
+        try:
+            cycle = list(next(iter(nx.simple_cycles(G))))
+            G.remove_edge(cycle[-1], cycle[0])
+        except StopIteration:
+            break
+
+    df = data[[c for c in names if c in data.columns]].copy()
+
+    result = falsify_graph(
+        G, df,
+        n_permutations=n_permutations,
+        plot_histogram=False,
+        suggestions=True,
+    )
+
+    # Parse result string for structured output
+    import re
+    result_str = str(result)
+
+    # Extract key metrics from the result string
+    violations = []
+    suggestions_list = []
+
+    # Look for p-value and violation info
+    p_value = None
+    p_match = re.search(r'p_value\s*=?\s*([\d.]+)', result_str)
+    if p_match:
+        p_value = float(p_match.group(1))
+
+    return {
+        "falsification_result": result_str,
+        "p_value": _safe_float(p_value) if p_value else None,
+        "n_permutations": n_permutations,
+        "n_nodes": len(G.nodes),
+        "n_edges": len(G.edges),
+    }
+
+
 def run_intervention_simulation(
     data: pd.DataFrame,
     adj: np.ndarray,

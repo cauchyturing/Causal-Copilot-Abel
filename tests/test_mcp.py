@@ -1,8 +1,9 @@
-"""Tests for the MCP server tools (10-tool contract).
+"""Tests for the MCP server tools (12-tool contract).
 
 Core: discover, inspect_graph, estimate_effect, diagnose_data, run_algorithm
 Reasoning: refute_estimate, estimate_counterfactual, attribute_anomaly,
            attribute_distribution_change, simulate_intervention
+Analysis: compute_feature_importance, validate_graph
 """
 
 import json
@@ -939,8 +940,136 @@ class TestSimulateInterventionTool:
 # ── MCP tool registration ────────────────────────────────────────────
 
 
+# ── Feature Importance ──────────────────────────────────────────────
+
+
+class TestFeatureImportanceEstimation:
+    def test_linear_shap(self):
+        from causal_copilot.mcp.estimation import compute_feature_importance
+
+        rng = np.random.default_rng(42)
+        n = 200
+        a = rng.normal(size=n)
+        b = 2.0 * a + rng.normal(size=n) * 0.5
+        c = 1.5 * b + 0.5 * a + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"A": a, "B": b, "C": c})
+        result = compute_feature_importance(data, "C", is_linear=True)
+        assert "feature_importance" in result
+        assert "B" in result["feature_importance"]
+        assert "A" in result["feature_importance"]
+        # B should have higher importance than A (coefficient 1.5 vs 0.5)
+        assert result["feature_importance"]["B"] > result["feature_importance"]["A"]
+        assert result["method"] == "linear_shap"
+
+    def test_tree_shap(self):
+        from causal_copilot.mcp.estimation import compute_feature_importance
+
+        rng = np.random.default_rng(42)
+        n = 200
+        a = rng.normal(size=n)
+        b = 2.0 * a + rng.normal(size=n) * 0.5
+        c = 1.5 * b + 0.5 * a + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"A": a, "B": b, "C": c})
+        result = compute_feature_importance(data, "C", is_linear=False)
+        assert result["method"] == "tree_shap"
+        assert "top_features" in result
+        assert len(result["top_features"]) > 0
+
+
+class TestComputeFeatureImportanceTool:
+    def test_basic_fi(self):
+        from causal_copilot.mcp.server import compute_feature_importance
+
+        rng = np.random.default_rng(42)
+        csv = _make_gcm_csv(rng)
+        result = json.loads(compute_feature_importance(
+            target_node="C",
+            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+        ))
+        assert result["status"] == "ok"
+        assert "feature_importance" in result
+        assert "interpretation" in result
+        assert "next_steps" in result
+
+    def test_target_not_in_data(self):
+        from causal_copilot.mcp.server import compute_feature_importance
+
+        csv = "A,B,C\n1,2,3\n4,5,6"
+        with pytest.raises(ToolError, match="MISSING"):
+            compute_feature_importance(
+                target_node="MISSING",
+                csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+            )
+
+    def test_nonlinear_detection(self):
+        from causal_copilot.mcp.server import compute_feature_importance
+
+        rng = np.random.default_rng(42)
+        csv = _make_gcm_csv(rng)
+        diag = '{"linearity": false}'
+        result = json.loads(compute_feature_importance(
+            target_node="C",
+            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+            data_diagnosis=diag,
+        ))
+        assert result["status"] == "ok"
+        assert result["method"] == "tree_shap"
+
+
+# ── Graph Validation ───────────────────────────────────────────────
+
+
+class TestGraphFalsificationEstimation:
+    def test_basic_falsification(self):
+        from causal_copilot.mcp.estimation import run_graph_falsification
+
+        rng = np.random.default_rng(42)
+        data = _make_gcm_data(rng)
+        adj = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0]])
+        names = ["A", "B", "C"]
+        result = run_graph_falsification(data, adj, names, n_permutations=5)
+        assert "falsification_result" in result
+        assert result["n_nodes"] == 3
+        assert result["n_edges"] == 3
+
+
+class TestValidateGraphTool:
+    def test_basic_validation(self):
+        from causal_copilot.mcp.server import validate_graph
+
+        rng = np.random.default_rng(42)
+        csv = _make_gcm_csv(rng)
+        result = json.loads(validate_graph(
+            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+            n_permutations=5,
+        ))
+        assert result["status"] == "ok"
+        assert "falsification_result" in result
+        assert "interpretation" in result
+        assert result["graph_kind"] == "dag"
+
+    def test_cpdag_sanitizes(self):
+        from causal_copilot.mcp.server import validate_graph
+
+        rng = np.random.default_rng(42)
+        csv = _make_gcm_csv(rng)
+        # CPDAG with undirected A--B, directed B→C, A→C
+        adj = "[[0,2,0],[2,0,0],[1,1,0]]"
+        names = '["A","B","C"]'
+        result = json.loads(validate_graph(
+            csv_data=csv, adjacency_matrix=adj, node_names=names,
+            n_permutations=5,
+        ))
+        assert result["status"] == "ok"
+        assert result["graph_kind"] == "cpdag"
+        assert "dropped_edges" in result
+
+
+# ── MCP tool registration ────────────────────────────────────────────
+
+
 class TestToolRegistration:
-    def test_10_tools_registered(self):
+    def test_12_tools_registered(self):
         import asyncio
         from causal_copilot.mcp.server import mcp
 
@@ -952,10 +1081,11 @@ class TestToolRegistration:
             "refute_estimate", "estimate_counterfactual",
             "attribute_anomaly", "attribute_distribution_change",
             "simulate_intervention",
+            "compute_feature_importance", "validate_graph",
         }
         missing = expected_tools - actual_names
         assert not missing, f"Missing tools: {missing}"
-        assert len(actual_names) >= 10, f"Expected 10+ tools, got {len(actual_names)}"
+        assert len(actual_names) >= 12, f"Expected 12+ tools, got {len(actual_names)}"
 
 
 # ── MCP CLI ────────────────────────────────────────────────────────────

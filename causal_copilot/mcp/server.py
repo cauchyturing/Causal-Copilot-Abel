@@ -39,7 +39,7 @@ mcp = FastMCP(
     instructions="""\
 Causal discovery & inference expert — turns any dataset into a causal graph, estimates effects, and performs causal reasoning.
 
-## Tools (10)
+## Tools (12)
 ### Core Pipeline
 1. **discover** — autonomous pipeline. Handles everything: data diagnosis, algorithm
    selection, hyperparameter tuning, execution, postprocessing. Use for 90% of cases.
@@ -62,10 +62,18 @@ Causal discovery & inference expert — turns any dataset into a causal graph, e
 10. **simulate_intervention** — interventional what-if: simulate shifting or setting a
     treatment value and see the outcome distribution change. Uses DoWhy GCM.
 
+### Analysis & Validation
+11. **compute_feature_importance** — SHAP-based feature importance: which variables most
+    influence a target? Uses linear or tree SHAP.
+12. **validate_graph** — graph falsification: test if the discovered causal graph is
+    consistent with the data. Uses DoWhy GCM LMC testing.
+
 ## Workflow
 - Full: discover(csv) → inspect_graph(run_id, T, Y) → estimate_effect(run_id, T, Y)
 - Quick: discover(csv) → estimate_effect(run_id, T, Y)
 - Validate: estimate_effect(…) → refute_estimate(run_id, T, Y) for robustness
+- Graph check: discover(csv) → validate_graph(run_id) to test graph-data consistency
+- Feature drivers: discover(csv) → compute_feature_importance(run_id, target) for SHAP
 - What-if: discover(csv) → estimate_counterfactual(run_id, T, Y, value)
 - Root cause: discover(csv) → attribute_anomaly(run_id, target_node)
 - Expert: diagnose_data(csv) → run_algorithm(csv, algo) → estimate_effect(run_id, T, Y)
@@ -1759,6 +1767,159 @@ def simulate_intervention(
     results["next_steps"] = [
         f"estimate_effect(treatment='{treatment}', outcome='{outcome}') "
         "for formal causal effect estimate with confidence intervals",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+# ── Feature Importance ─────────────────────────────────────────────────
+
+
+@mcp.tool()
+def compute_feature_importance(
+    target_node: str,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    data_diagnosis: str = "",
+) -> str:
+    """Compute SHAP-based feature importance for a target variable.
+
+    Shows which variables have the strongest predictive influence on the
+    target. Uses linear SHAP for linear data, tree SHAP for nonlinear.
+
+    Args:
+        target_node: Variable to analyze (must be in data columns)
+        run_id: Run ID from discover/run_algorithm
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+        data_diagnosis: JSON with linearity info (optional)
+
+    Returns:
+        JSON with feature importance scores sorted by magnitude
+    """
+    df, adj, names, diagnosis = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+        data_diagnosis=data_diagnosis,
+    )
+
+    if target_node not in df.columns:
+        raise ToolError(f"Target '{target_node}' not in data columns.")
+
+    is_linear = True
+    if diagnosis:
+        is_linear = diagnosis.get("linearity", True)
+
+    try:
+        from causal_copilot.mcp.estimation import compute_feature_importance as _compute_fi
+
+        with _pipeline_cwd():
+            results = _compute_fi(df, target_node, is_linear)
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Feature importance failed: {e}",
+            "next_steps": ["Check data has enough observations and variance."],
+        })
+
+    results["status"] = "ok"
+
+    # Interpretation
+    top = results["top_features"][:3]
+    results["interpretation"] = (
+        f"Top drivers of {target_node}: {', '.join(top)}. "
+        f"Method: {results['method']}."
+    )
+
+    results["next_steps"] = [
+        f"estimate_effect(treatment='{top[0]}', outcome='{target_node}') "
+        "to quantify causal effect of the top feature" if top else "",
+        "inspect_graph() to see causal structure between these variables",
+    ]
+
+    return json.dumps(results, indent=2, cls=_NumpyEncoder)
+
+
+# ── Graph Validation ─────────────────────────────────────────────────
+
+
+@mcp.tool()
+def validate_graph(
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    n_permutations: int = 20,
+) -> str:
+    """Test if a causal graph is consistent with data (falsification).
+
+    Uses DoWhy GCM Local Markov Condition (LMC) testing. Compares the
+    proposed graph against random permutations. Low p-value means the
+    graph is significantly better than random.
+
+    Args:
+        run_id: Run ID from discover/run_algorithm
+        csv_data: CSV string (alternative to run_id)
+        adjacency_matrix: JSON 2D array (needed with csv_data)
+        node_names: JSON array of variable names (needed with csv_data)
+        n_permutations: Number of random graph permutations (default 20)
+
+    Returns:
+        JSON with falsification test results and interpretation
+    """
+    df, adj, names, _ = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names,
+    )
+
+    graph_kind = classify_graph_kind(adj)
+    if graph_kind != "dag":
+        clean_adj, dropped = _sanitize_for_estimation(adj, names)
+    else:
+        clean_adj = adj
+        dropped = []
+
+    try:
+        from causal_copilot.mcp.estimation import run_graph_falsification
+
+        with _pipeline_cwd():
+            results = run_graph_falsification(
+                df, clean_adj, names, n_permutations,
+            )
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "error": f"Graph falsification failed: {e}",
+            "next_steps": ["Ensure graph is a DAG and data has enough observations."],
+        })
+
+    results["status"] = "ok"
+    results["graph_kind"] = graph_kind
+    if dropped:
+        results["dropped_edges"] = dropped
+
+    # Interpretation
+    p = results.get("p_value")
+    if p is not None:
+        if p < 0.05:
+            results["interpretation"] = (
+                f"Graph is significantly better than random (p={p:.4f}). "
+                "The causal structure appears consistent with the data."
+            )
+        else:
+            results["interpretation"] = (
+                f"Graph is NOT significantly better than random (p={p:.4f}). "
+                "The causal structure may not fit the data well."
+            )
+    else:
+        results["interpretation"] = (
+            "Falsification test completed. See falsification_result for details."
+        )
+
+    results["next_steps"] = [
+        "discover() to re-run causal discovery if graph doesn't fit",
+        "run_algorithm() with a different algorithm",
     ]
 
     return json.dumps(results, indent=2, cls=_NumpyEncoder)

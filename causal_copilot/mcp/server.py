@@ -486,7 +486,13 @@ def estimate_effect(
         select_estimation_method as _offline_select_method,
     )
 
-    _, _, _, treatment_kind = prepare_treatment(df, treatment)
+    # Compute T0/T1 from data — for continuous treatment, prepare_treatment
+    # returns 10th/90th percentile values. Feed these back into control_value/
+    # treatment_value for all estimation calls (matching copilot.py:689-696).
+    _, T0_computed, T1_computed, treatment_kind = prepare_treatment(df, treatment, T0=control_value, T1=treatment_value)
+    control_value = T0_computed
+    treatment_value = T1_computed
+
     is_linear = bool(diagnosis.get("linearity", True)) if diagnosis else True
     is_gaussian = bool(diagnosis.get("gaussian_error", True)) if diagnosis else True
 
@@ -651,8 +657,8 @@ def estimate_effect(
                     treatment,
                     outcome,
                     match_conf,
-                    int(control_value),
-                    int(treatment_value),
+                    control_value,
+                    treatment_value,
                 )
             method_detail = "Propensity Score Matching (sklearn)"
 
@@ -2497,10 +2503,13 @@ def generate_report(run_id: str) -> str:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
                 # Set minimal eda with required keys to prevent KeyError in
                 # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
+                # and ts_eda_prompt():339-356 accessing lag_corr_summary/diagnostics_summary
                 if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
                     gs.results.eda = {
                         "plot_path_dist": [""],
                         "plot_path_corr": [""],
+                        "lag_corr_summary": "",
+                        "diagnostics_summary": "",
                     }
 
             # 2. Visualizations — graph plots, heatmaps

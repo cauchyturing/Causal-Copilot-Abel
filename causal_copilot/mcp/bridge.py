@@ -52,7 +52,15 @@ def make_global_state(df, query="", algorithm=None, seed=42):
     gs.user_data.raw_data = df.copy()
     gs.user_data.processed_data = df.copy()
     gs.user_data.initial_query = query or "Discover causal relationships in this dataset."
-    gs.user_data.selected_features = df.columns.tolist()
+    cols = df.columns.tolist()
+    gs.user_data.selected_features = cols
+    # visual_selected_features: used by stat_info_functions linearity_check/
+    # gaussian_check for datasets with ≥10 features (selects subset for plots).
+    # Without this, stat_info_collection crashes with TypeError: df_raw[None].
+    gs.user_data.visual_selected_features = cols
+    # knowledge_docs: downstream code (HP Selector, Filter, Reranker) calls
+    # '\n'.join(knowledge_docs) — None causes TypeError. Default to empty list.
+    gs.user_data.knowledge_docs = []
     gs.user_data.output_report_dir = output_dir
     gs.user_data.output_graph_dir = output_dir
 

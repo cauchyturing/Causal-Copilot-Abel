@@ -420,7 +420,9 @@ class CausalCopilot:
             decision = rule_based_select(properties)
 
         # --- HP tuning (LLM HyperparameterSelector → defaults fallback) ---
-        if not algorithm and pipeline_available and gs is not None:
+        # Run HP Selector regardless of whether algorithm was user-specified,
+        # matching server.py discover() which always runs it (line 1259-1262).
+        if pipeline_available and gs is not None:
             try:
                 import os
 
@@ -1450,10 +1452,13 @@ class CausalCopilot:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
                 # Set minimal eda with required keys to prevent KeyError in
                 # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
+                # and ts_eda_prompt():339-356 accessing lag_corr_summary/diagnostics_summary
                 if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
                     gs.results.eda = {
                         "plot_path_dist": [""],
                         "plot_path_corr": [""],
+                        "lag_corr_summary": "",
+                        "diagnostics_summary": "",
                     }
 
             # 2. Visualizations

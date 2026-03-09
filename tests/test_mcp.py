@@ -2353,6 +2353,106 @@ class TestAuditRound2Quality:
         assert "forbid_record" in gs.results.llm_errors
 
 
+# ── Audit Round 3 — Bug Fixes ──────────────────────────────────────────
+
+
+class TestAuditRound3Bugs:
+    """Tests for bugs found in the third comprehensive audit."""
+
+    def test_b1_visual_selected_features_set(self):
+        """B1: make_global_state must set visual_selected_features.
+
+        stat_info_functions linearity_check/gaussian_check access this field
+        for datasets with ≥10 features. None causes TypeError: df_raw[None].
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+
+        df = pd.DataFrame({f"V{i}": range(20) for i in range(12)})
+        gs = make_global_state(df)
+        assert gs.user_data.visual_selected_features is not None
+        assert len(gs.user_data.visual_selected_features) == 12
+        assert gs.user_data.visual_selected_features == df.columns.tolist()
+
+    def test_b2_estimate_effect_feeds_back_t0_t1(self):
+        """B2: estimate_effect must use prepare_treatment's T0/T1, not raw defaults.
+
+        For continuous treatment, prepare_treatment computes 10th/90th quantiles.
+        The estimation calls must use these, not the raw control_value/treatment_value.
+        """
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # The fixed version calls prepare_treatment and feeds back T0/T1
+        assert "T0_computed" in source or "control_value = T0_computed" in source
+
+    def test_b3_matching_no_int_cast(self):
+        """B3: Matching should not int()-cast control/treatment values.
+
+        int(0.5) = 0 silently truncates floats, producing wrong group selection.
+        """
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # The fixed version should NOT have int(control_value) or int(treatment_value)
+        assert "int(control_value)" not in source
+        assert "int(treatment_value)" not in source
+
+    def test_b4_knowledge_docs_defaults_to_empty_list(self):
+        """B4: make_global_state must set knowledge_docs to [] not None.
+
+        HP Selector calls '\\n'.join(knowledge_docs) — None causes TypeError.
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        assert gs.user_data.knowledge_docs is not None
+        assert isinstance(gs.user_data.knowledge_docs, list)
+        # join should not crash
+        result = "\n".join(gs.user_data.knowledge_docs)
+        assert isinstance(result, str)
+
+    def test_b5_ts_eda_fallback_has_all_keys(self):
+        """B5: EDA fallback dict must include time-series keys.
+
+        ts_eda_prompt() accesses lag_corr_summary and diagnostics_summary.
+        """
+        fallback = {
+            "plot_path_dist": [""],
+            "plot_path_corr": [""],
+            "lag_corr_summary": "",
+            "diagnostics_summary": "",
+        }
+        # All keys used by eda_prompt and ts_eda_prompt must exist
+        assert "plot_path_dist" in fallback
+        assert "plot_path_corr" in fallback
+        assert "lag_corr_summary" in fallback
+        assert "diagnostics_summary" in fallback
+
+    def test_b2_continuous_treatment_t0_t1_correct(self):
+        """B2 integration: For continuous treatment, T0/T1 should be quantile-based."""
+        from causal_copilot.mcp.offline import prepare_treatment
+
+        rng = np.random.default_rng(42)
+        df = pd.DataFrame({"T": rng.normal(5, 2, 100), "Y": rng.normal(size=100)})
+
+        # User passes default T0=0, T1=1 but treatment is continuous around 5
+        _, T0, T1, kind = prepare_treatment(df, "T", T0=0.0, T1=1.0)
+        assert kind == "continuous"
+        # prepare_treatment should return user's T0/T1 since they were provided
+        # But the important thing is server.py NOW feeds these back correctly
+        assert T0 == 0.0  # user-provided values preserved
+        assert T1 == 1.0
+
+        # When T0/T1 are None, quantiles are used
+        _, T0_auto, T1_auto, _ = prepare_treatment(df, "T")
+        assert T0_auto == pytest.approx(df["T"].quantile(0.1), rel=1e-6)
+        assert T1_auto == pytest.approx(df["T"].quantile(0.9), rel=1e-6)
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

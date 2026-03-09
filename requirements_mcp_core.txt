@@ -16,6 +16,9 @@ scikit-learn>=1.3
 dowhy>=0.12
 econml>=0.15
 
+# pydot 4.0 breaks DoWhy (get_strict() signature change)
+pydot<4.0
+
 networkx>=3.0
 statsmodels>=0.14
 

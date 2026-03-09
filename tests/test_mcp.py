@@ -4,6 +4,7 @@ import json
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -419,6 +420,45 @@ class TestDiscoverTool:
         with _mock_run_algorithm():
             result = json.loads(discover(csv, algorithm="PC"))
         assert result["status"] in ("ok", "partial", "error")
+
+
+# ── MCP CLI ────────────────────────────────────────────────────────────
+
+
+# ── estimation helpers ────────────────────────────────────────────────
+
+
+class TestEstimationLinear:
+    def test_linear_basic(self):
+        from causal_copilot.mcp.estimation import estimate_linear
+
+        rng = np.random.default_rng(42)
+        n = 200
+        x = rng.normal(size=n)
+        y = 2.0 * x + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"X": x, "Y": y})
+        dot_graph = "digraph { X -> Y; }"
+        result = estimate_linear(data, dot_graph, "X", "Y", 0.0, 1.0)
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert 1.5 < ate < 2.5, f"ATE should be ~2.0, got {ate}"
+        assert result["ate"]["p_value"] < 0.05
+
+
+class TestEstimationMatching:
+    def test_matching_binary(self):
+        from causal_copilot.mcp.estimation import estimate_matching
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        t = (z + rng.normal(size=n) > 0).astype(int)  # binary treatment
+        y = 3.0 * t + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "T": t, "Y": y})
+        result = estimate_matching(data, "T", "Y", ["Z"], 0, 1)
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert 2.0 < ate < 4.0, f"ATE should be ~3.0, got {ate}"
 
 
 # ── MCP CLI ────────────────────────────────────────────────────────────

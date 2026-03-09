@@ -509,9 +509,20 @@ class CausalCopilot:
                 gs.user_data.processed_data = numeric_df
                 gs.user_data.selected_features = list(numeric_df.columns)
 
+                # Extract lagged_graph from metadata for time-series algos.
+                # Programming.forward() (program.py:58-78) does this from
+                # info['lag_matrix']. Without it, TS Judge skip is dead code.
+                is_ts = getattr(gs.statistics, "time_series", False)
+                if is_ts and isinstance(metadata, dict) and "lag_matrix" in metadata:
+                    lag = metadata["lag_matrix"]
+                    if isinstance(lag, list):
+                        lag = np.array(lag)
+                    gs.results.lagged_graph = lag
+                elif is_ts:
+                    gs.results.lagged_graph = None
+
                 # Postprocess: skip Judge for time-series data when lagged_graph
                 # exists (main.py:268: time_series AND lagged_graph is not None)
-                is_ts = getattr(gs.statistics, "time_series", False)
                 has_lagged = getattr(gs.results, "lagged_graph", None) is not None
                 if is_ts and has_lagged:
                     gs.results.revised_graph = gs.results.converted_graph
@@ -1450,15 +1461,21 @@ class CausalCopilot:
                 eda.generate_eda()
             except Exception as eda_err:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
-                # Set minimal eda with required keys to prevent KeyError in
-                # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
-                # and ts_eda_prompt():339-356 accessing lag_corr_summary/diagnostics_summary
+                # Set minimal EDA with ALL keys accessed by report_generation.py:
+                # Non-TS: eda_summary_to_latex() → dist_analysis_num, dist_analysis_cat,
+                #         corr_analysis; eda_prompt() → plot_path_dist, plot_path_corr
+                # TS: ts_eda_prompt() → lag_corr_summary (dict w/ potential_granger_causality),
+                #     plot_path_lag_corr, diagnostics_summary (dict)
                 if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
                     gs.results.eda = {
                         "plot_path_dist": [""],
                         "plot_path_corr": [""],
-                        "lag_corr_summary": "",
-                        "diagnostics_summary": "",
+                        "plot_path_lag_corr": "",
+                        "dist_analysis_num": {},
+                        "dist_analysis_cat": {},
+                        "corr_analysis": {},
+                        "lag_corr_summary": {"potential_granger_causality": []},
+                        "diagnostics_summary": {},
                     }
 
             # 2. Visualizations

@@ -415,8 +415,8 @@ def estimate_effect(
     adjacency_matrix: str = "",
     node_names: str = "",
     method: str = "",
-    control_value: float = 0.0,
-    treatment_value: float = 1.0,
+    control_value: str = "",
+    treatment_value: str = "",
     confounders: str = "",
     data_diagnosis: str = "",
     instrument: str = "",
@@ -439,8 +439,10 @@ def estimate_effect(
         node_names: JSON array of variable names
         method: Estimation method ("linear", "matching", "dml", "drl",
                 "metalearner", "iv", or "" for auto)
-        control_value: Reference value for control group (default 0.0)
-        treatment_value: Reference value for treatment group (default 1.0)
+        control_value: Control group reference value (empty for auto-detect:
+                       binary/discrete → min, continuous → 10th percentile)
+        treatment_value: Treatment group reference value (empty for auto-detect:
+                         binary/discrete → max, continuous → 90th percentile)
         confounders: JSON array of confounder names (default: auto-detect from graph)
         data_diagnosis: JSON with linearity/gaussian_error (needed for CPDAG)
         instrument: Instrument variable name for IV method (auto-detected from graph if empty)
@@ -486,10 +488,11 @@ def estimate_effect(
         select_estimation_method as _offline_select_method,
     )
 
-    # Compute T0/T1 from data — for continuous treatment, prepare_treatment
-    # returns 10th/90th percentile values. Feed these back into control_value/
-    # treatment_value for all estimation calls (matching copilot.py:689-696).
-    _, T0_computed, T1_computed, treatment_kind = prepare_treatment(df, treatment, T0=control_value, T1=treatment_value)
+    # Parse user-provided T0/T1 or leave as None for auto-detection.
+    # Auto-detect: binary/discrete → min/max, continuous → 10th/90th percentile.
+    T0_input = float(control_value) if control_value else None
+    T1_input = float(treatment_value) if treatment_value else None
+    _, T0_computed, T1_computed, treatment_kind = prepare_treatment(df, treatment, T0=T0_input, T1=T1_input)
     control_value = T0_computed
     treatment_value = T1_computed
 
@@ -595,9 +598,15 @@ def estimate_effect(
             + ("..." if len(dropped_edges) > 5 else "")
         )
 
-    # --- Confounders ---
+    # --- Restore T→O edge if it was undirected (CPDAG) and got dropped ---
     t_idx = names.index(treatment)
     o_idx = names.index(outcome)
+    had_edge = adj[o_idx, t_idx] != 0 or adj[t_idx, o_idx] != 0
+    if had_edge and clean_adj[o_idx, t_idx] == 0:
+        clean_adj[o_idx, t_idx] = 1  # Restore as directed T→O
+        warnings_list.append(f"Restored {treatment}->{outcome} as directed for estimation (was undirected in CPDAG)")
+
+    # --- Confounders ---
     if confounders:
         try:
             conf_list = json.loads(confounders)
@@ -878,11 +887,15 @@ def diagnose_data(csv_data: str) -> str:
         raise ToolError("Need at least 2 columns of data.")
 
     try:
-        from preprocess.stat_info_functions import stat_info_collection
+        from preprocess.stat_info_functions import (
+            convert_stat_info_to_text,
+            stat_info_collection,
+        )
 
         gs = make_global_state(df)
         with _pipeline_cwd():
             gs = stat_info_collection(gs)
+        gs.statistics.description = convert_stat_info_to_text(gs.statistics)
 
         stats = gs.statistics
 
@@ -1052,13 +1065,17 @@ def run_algorithm(
         from causal_discovery.ci_test_resolver import resolve_ci_test
         from causal_discovery.program import Programming
         from causal_discovery.score_resolver import resolve_score_func
-        from preprocess.stat_info_functions import stat_info_collection
+        from preprocess.stat_info_functions import (
+            convert_stat_info_to_text,
+            stat_info_collection,
+        )
 
         gs = make_global_state(df, algorithm=algorithm, seed=seed)
         args = make_args(seed=seed)
 
         with _pipeline_cwd():
             gs = stat_info_collection(gs)
+            gs.statistics.description = convert_stat_info_to_text(gs.statistics)
 
             # Start from user's exact hyperparameters
             requested_hp = dict(hp)
@@ -1323,11 +1340,11 @@ def discover(
                 "IAMBnPC",
                 "MBOR",
             }
-            if algo_name in ci_test_algos:
+            if algo_name in ci_test_algos and "indep_test" in algo_args:
                 algo_args["indep_test"] = resolve_ci_test(gs.statistics)
 
             score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
-            if algo_name in score_algos:
+            if algo_name in score_algos and "score_func" in algo_args:
                 algo_args["score_func"] = resolve_score_func(
                     gs.statistics,
                     algo_name,
@@ -1701,8 +1718,8 @@ def refute_estimate(
     csv_data: str = "",
     adjacency_matrix: str = "",
     node_names: str = "",
-    control_value: float = 0.0,
-    treatment_value: float = 1.0,
+    control_value: str = "",
+    treatment_value: str = "",
 ) -> str:
     """Test robustness of a causal effect estimate with sensitivity analysis.
 
@@ -1722,8 +1739,8 @@ def refute_estimate(
         csv_data: CSV string (alternative to run_id)
         adjacency_matrix: JSON 2D array (needed with csv_data)
         node_names: JSON array of variable names (needed with csv_data)
-        control_value: Control group value (default 0.0)
-        treatment_value: Treatment group value (default 1.0)
+        control_value: Control group reference value (empty for auto-detect)
+        treatment_value: Treatment group reference value (empty for auto-detect)
 
     Returns:
         JSON with original_estimate, refutation results, interpretation
@@ -1750,6 +1767,15 @@ def refute_estimate(
                 "graph_kind": "pag",
             }
         )
+
+    # Parse T0/T1 with auto-detection
+    from causal_copilot.mcp.offline import prepare_treatment
+
+    T0_input = float(control_value) if control_value else None
+    T1_input = float(treatment_value) if treatment_value else None
+    _, T0_val, T1_val, _ = prepare_treatment(df, treatment, T0=T0_input, T1=T1_input)
+    control_value = T0_val
+    treatment_value = T1_val
 
     clean_adj, _ = _sanitize_for_estimation(adj, names)
     dot_graph = _adj_to_dot(clean_adj, names)
@@ -2501,15 +2527,21 @@ def generate_report(run_id: str) -> str:
                 eda.generate_eda()
             except Exception as eda_err:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
-                # Set minimal eda with required keys to prevent KeyError in
-                # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
-                # and ts_eda_prompt():339-356 accessing lag_corr_summary/diagnostics_summary
+                # Set minimal EDA with ALL keys accessed by report_generation.py:
+                # Non-TS: eda_summary_to_latex() → dist_analysis_num, dist_analysis_cat,
+                #         corr_analysis; eda_prompt() → plot_path_dist, plot_path_corr
+                # TS: ts_eda_prompt() → lag_corr_summary (dict w/ potential_granger_causality),
+                #     plot_path_lag_corr, diagnostics_summary (dict)
                 if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
                     gs.results.eda = {
                         "plot_path_dist": [""],
                         "plot_path_corr": [""],
-                        "lag_corr_summary": "",
-                        "diagnostics_summary": "",
+                        "plot_path_lag_corr": "",
+                        "dist_analysis_num": {},
+                        "dist_analysis_cat": {},
+                        "corr_analysis": {},
+                        "lag_corr_summary": {"potential_granger_causality": []},
+                        "diagnostics_summary": {},
                     }
 
             # 2. Visualizations — graph plots, heatmaps

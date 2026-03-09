@@ -64,6 +64,16 @@ def make_global_state(df, query="", algorithm=None, seed=42):
     gs.user_data.output_report_dir = output_dir
     gs.user_data.output_graph_dir = output_dir
 
+    # domain_index detection — matching Initialize_state.py:44-49.
+    # Without this, domain_index column is treated as a causal variable
+    # and CDNOD (heterogeneous data algo) won't be triggered.
+    if "domain_index" in df.columns:
+        if df["domain_index"].nunique() > 1:
+            gs.statistics.heterogeneous = True
+        else:
+            gs.statistics.heterogeneous = False
+        gs.statistics.domain_index = "domain_index"
+
     if algorithm:
         gs.algorithm.selected_algorithm = algorithm
 

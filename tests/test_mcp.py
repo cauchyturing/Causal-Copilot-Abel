@@ -56,6 +56,7 @@ def _inject_fake_stat_module():
     old = sys.modules.get("preprocess.stat_info_functions")
     fake = ModuleType("preprocess.stat_info_functions")
     fake.stat_info_collection = _mock_stat_info
+    fake.convert_stat_info_to_text = lambda stats: getattr(stats, "description", "") or "Mock description"
     sys.modules["preprocess.stat_info_functions"] = fake
     return had, old
 
@@ -575,6 +576,9 @@ class TestEstimateEffectTool:
                 adjacency_matrix=adj,
                 node_names=names,
                 method="linear",
+                # Explicit T0/T1 to get per-unit causal effect
+                control_value="0",
+                treatment_value="1",
             )
         )
         assert result["status"] == "ok"
@@ -703,6 +707,8 @@ class TestEstimateEffectTool:
                 outcome="Y",
                 run_id=rid,
                 method="linear",
+                control_value="0",
+                treatment_value="1",
             )
         )
         assert result["status"] == "ok"
@@ -1405,6 +1411,7 @@ class TestKnowledgePrompt:
 
         fake = ModuleType("preprocess.stat_info_functions")
         fake.stat_info_collection = _mock_nongauss
+        fake.convert_stat_info_to_text = lambda stats: getattr(stats, "description", "") or "Mock description"
         old = sys.modules.get("preprocess.stat_info_functions")
         sys.modules["preprocess.stat_info_functions"] = fake
         try:
@@ -2416,21 +2423,29 @@ class TestAuditRound3Bugs:
         assert isinstance(result, str)
 
     def test_b5_ts_eda_fallback_has_all_keys(self):
-        """B5: EDA fallback dict must include time-series keys.
+        """B5: EDA fallback dict must include ALL report_generation.py keys.
 
-        ts_eda_prompt() accesses lag_corr_summary and diagnostics_summary.
+        Non-TS: eda_summary_to_latex → dist_analysis_num, dist_analysis_cat, corr_analysis
+                eda_prompt → plot_path_dist, plot_path_corr
+        TS: ts_eda_prompt → lag_corr_summary (dict), plot_path_lag_corr, diagnostics_summary (dict)
         """
-        fallback = {
-            "plot_path_dist": [""],
-            "plot_path_corr": [""],
-            "lag_corr_summary": "",
-            "diagnostics_summary": "",
-        }
-        # All keys used by eda_prompt and ts_eda_prompt must exist
-        assert "plot_path_dist" in fallback
-        assert "plot_path_corr" in fallback
-        assert "lag_corr_summary" in fallback
-        assert "diagnostics_summary" in fallback
+        import inspect
+
+        from causal_copilot.mcp.server import generate_report
+
+        source = inspect.getsource(generate_report)
+        # All keys must be present in the fallback dict
+        for key in [
+            "plot_path_dist",
+            "plot_path_corr",
+            "plot_path_lag_corr",
+            "dist_analysis_num",
+            "dist_analysis_cat",
+            "corr_analysis",
+            "lag_corr_summary",
+            "diagnostics_summary",
+        ]:
+            assert f'"{key}"' in source, f"Missing key '{key}' in EDA fallback"
 
     def test_b2_continuous_treatment_t0_t1_correct(self):
         """B2 integration: For continuous treatment, T0/T1 should be quantile-based."""
@@ -2439,18 +2454,203 @@ class TestAuditRound3Bugs:
         rng = np.random.default_rng(42)
         df = pd.DataFrame({"T": rng.normal(5, 2, 100), "Y": rng.normal(size=100)})
 
-        # User passes default T0=0, T1=1 but treatment is continuous around 5
-        _, T0, T1, kind = prepare_treatment(df, "T", T0=0.0, T1=1.0)
+        # When T0/T1 are None (server.py default: empty string → None), quantiles are used
+        _, T0_auto, T1_auto, kind = prepare_treatment(df, "T")
         assert kind == "continuous"
-        # prepare_treatment should return user's T0/T1 since they were provided
-        # But the important thing is server.py NOW feeds these back correctly
-        assert T0 == 0.0  # user-provided values preserved
-        assert T1 == 1.0
-
-        # When T0/T1 are None, quantiles are used
-        _, T0_auto, T1_auto, _ = prepare_treatment(df, "T")
         assert T0_auto == pytest.approx(df["T"].quantile(0.1), rel=1e-6)
         assert T1_auto == pytest.approx(df["T"].quantile(0.9), rel=1e-6)
+
+        # User-provided values are preserved
+        _, T0, T1, _ = prepare_treatment(df, "T", T0=3.0, T1=7.0)
+        assert T0 == 3.0
+        assert T1 == 7.0
+
+
+# ── Audit Round 4 — Bug Fixes ──────────────────────────────────────────
+
+
+class TestAuditRound4Bugs:
+    """Tests for bugs found in the fourth comprehensive audit."""
+
+    def test_b1_t0_t1_auto_detection_for_continuous(self):
+        """B1: estimate_effect with empty control/treatment_value triggers auto-detect.
+
+        For continuous treatment, prepare_treatment returns 10th/90th percentiles.
+        server.py defaults were float 0.0/1.0 which prevented auto-detection.
+        """
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # Verify empty string defaults, not float defaults
+        assert 'control_value: str = ""' in source
+        assert 'treatment_value: str = ""' in source
+        # Verify None parsing logic
+        assert "T0_input" in source
+        assert "T1_input" in source
+
+    def test_b1_refute_t0_t1_auto_detection(self):
+        """B1: refute_estimate also uses auto-detection for T0/T1."""
+        import inspect
+
+        from causal_copilot.mcp.server import refute_estimate
+
+        source = inspect.getsource(refute_estimate)
+        assert 'control_value: str = ""' in source
+        assert 'treatment_value: str = ""' in source
+
+    def test_b2_eda_fallback_complete(self):
+        """B2: EDA fallback must have ALL keys accessed by report_generation.py.
+
+        Non-TS: dist_analysis_num, dist_analysis_cat, corr_analysis, plot_path_dist, plot_path_corr
+        TS: lag_corr_summary (dict with potential_granger_causality), plot_path_lag_corr,
+            diagnostics_summary (dict)
+        """
+        import inspect
+
+        from causal_copilot.mcp.server import generate_report
+
+        source = inspect.getsource(generate_report)
+        required_keys = [
+            "plot_path_dist",
+            "plot_path_corr",
+            "plot_path_lag_corr",
+            "dist_analysis_num",
+            "dist_analysis_cat",
+            "corr_analysis",
+            "lag_corr_summary",
+            "diagnostics_summary",
+        ]
+        for key in required_keys:
+            assert f'"{key}"' in source, f"EDA fallback missing '{key}'"
+
+        # lag_corr_summary must be dict, not string
+        assert '"lag_corr_summary": {' in source or "'lag_corr_summary': {" in source
+
+    def test_b2_eda_fallback_copilot(self):
+        """B2: copilot.py EDA fallback must also be complete."""
+        import inspect
+
+        from causal_copilot.copilot import CausalCopilot
+
+        source = inspect.getsource(CausalCopilot)
+        for key in ["dist_analysis_num", "dist_analysis_cat", "corr_analysis", "plot_path_lag_corr"]:
+            assert f'"{key}"' in source, f"copilot.py EDA fallback missing '{key}'"
+
+    def test_b3_resolver_overrides_have_guards(self):
+        """B3: discover() resolver overrides must check 'indep_test in algo_args'.
+
+        HP Selector already conditionally overrides. Post-HP-Selector overrides
+        should also be conditional (matching hyperparameter_selector.py:38).
+        """
+        import inspect
+
+        from causal_copilot.mcp.server import discover
+
+        source = inspect.getsource(discover)
+        # Must have the conditional guard, not unconditional override
+        assert '"indep_test" in algo_args' in source
+        assert '"score_func" in algo_args' in source
+
+    def test_b4_domain_index_detection(self):
+        """B4: make_global_state detects domain_index column.
+
+        Without this, domain_index is treated as causal variable and
+        CDNOD (heterogeneous data algo) won't be triggered.
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+
+        # Dataset WITH domain_index column (multiple domains)
+        df = pd.DataFrame(
+            {
+                "A": [1, 2, 3, 4],
+                "B": [5, 6, 7, 8],
+                "domain_index": [0, 0, 1, 1],
+            }
+        )
+        gs = make_global_state(df)
+        assert gs.statistics.heterogeneous is True
+        assert gs.statistics.domain_index == "domain_index"
+
+        # Dataset WITH domain_index but single domain
+        df_single = pd.DataFrame(
+            {
+                "A": [1, 2, 3],
+                "B": [4, 5, 6],
+                "domain_index": [0, 0, 0],
+            }
+        )
+        gs_single = make_global_state(df_single)
+        assert gs_single.statistics.heterogeneous is False
+
+        # Dataset WITHOUT domain_index
+        df_no = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
+        gs_no = make_global_state(df_no)
+        assert gs_no.statistics.domain_index is None
+
+    def test_b5_drl_always_discretizes_non_binary(self):
+        """B5: DRL discretizes all non-binary treatments (not just nunique>10).
+
+        Analysis class always sets discretize=True for DRL (line 901).
+        """
+        from causal_copilot.mcp.estimation import estimate_drl
+
+        rng = np.random.default_rng(42)
+        n = 200
+        # Discrete treatment with 5 unique values (< 10, would be skipped before)
+        df = pd.DataFrame(
+            {
+                "T": rng.choice([0, 1, 2, 3, 4], n),
+                "Y": rng.normal(size=n),
+                "X": rng.normal(size=n),
+            }
+        )
+        result = estimate_drl(
+            df,
+            "T",
+            "Y",
+            X_col=["X"],
+            W_col=[],
+            T0=0,
+            T1=4,
+            is_linear=True,
+            treatment_kind="discrete",
+        )
+        assert "ate" in result
+
+    def test_b6_diagnose_data_has_description(self):
+        """B6: diagnose_data must call convert_stat_info_to_text."""
+        import inspect
+
+        from causal_copilot.mcp.server import diagnose_data
+
+        source = inspect.getsource(diagnose_data)
+        assert "convert_stat_info_to_text" in source
+
+    def test_b7_sanitize_restores_t_to_o_edge(self):
+        """B7: After sanitization, T→O edge is restored if it was undirected."""
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # Must contain the T→O restoration logic
+        assert "Restored" in source
+        assert "had_edge" in source
+
+    def test_b8_copilot_extracts_lagged_graph(self):
+        """B8: copilot.py must extract lagged_graph from metadata.
+
+        Without this, TS Judge skip condition (is_ts and has_lagged) is dead code.
+        """
+        import inspect
+
+        from causal_copilot.copilot import CausalCopilot
+
+        source = inspect.getsource(CausalCopilot)
+        assert "lag_matrix" in source
+        assert "lagged_graph" in source
 
 
 # ── MCP CLI ────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from fastmcp.exceptions import ToolError
 
 
 class _MockWrapper:
@@ -195,67 +196,58 @@ class TestInspectGraphTool:
     def test_run_id_not_found(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(run_id="nonexistent"))
-        assert result["status"] == "error"
-        assert "not found" in result["error"]
+        with pytest.raises(ToolError, match="not found"):
+            inspect_graph(run_id="nonexistent")
 
     def test_mutual_exclusion(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            run_id="abc",
-            adjacency_matrix="[[0]]",
-        ))
-        assert result["status"] == "error"
-        assert "mutually exclusive" in result["error"]
+        with pytest.raises(ToolError, match="mutually exclusive"):
+            inspect_graph(run_id="abc", adjacency_matrix="[[0]]")
 
     def test_no_input(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph())
-        assert result["status"] == "error"
+        with pytest.raises(ToolError):
+            inspect_graph()
 
     def test_missing_node_names(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(adjacency_matrix="[[0,1],[0,0]]"))
-        assert result["status"] == "error"
-        assert "node_names" in result["error"]
+        with pytest.raises(ToolError, match="node_names"):
+            inspect_graph(adjacency_matrix="[[0,1],[0,0]]")
 
     def test_treatment_outcome_all_or_none(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-            treatment="A",
-        ))
-        assert result["status"] == "error"
-        assert "both" in result["error"].lower()
+        with pytest.raises(ToolError, match="[Bb]oth"):
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+                treatment="A",
+            )
 
     def test_treatment_equals_outcome(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-            treatment="A",
-            outcome="A",
-        ))
-        assert result["status"] == "error"
-        assert "different" in result["error"].lower()
+        with pytest.raises(ToolError, match="different"):
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+                treatment="A",
+                outcome="A",
+            )
 
     def test_treatment_not_in_names(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-            treatment="Z",
-            outcome="B",
-        ))
-        assert result["status"] == "error"
-        assert "Z" in result["error"]
+        with pytest.raises(ToolError, match="Z"):
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+                treatment="Z",
+                outcome="B",
+            )
 
     def test_graph_stats(self):
         from causal_copilot.mcp.server import inspect_graph
@@ -293,8 +285,8 @@ class TestDiagnoseDataTool:
     def test_empty_csv(self):
         from causal_copilot.mcp.server import diagnose_data
 
-        result = json.loads(diagnose_data(""))
-        assert result["status"] == "error"
+        with pytest.raises(ToolError):
+            diagnose_data("")
 
 
 # ── run_algorithm ──────────────────────────────────────────────────────
@@ -360,8 +352,8 @@ class TestRunAlgorithmTool:
     def test_missing_algorithm(self):
         from causal_copilot.mcp.server import run_algorithm
 
-        result = json.loads(run_algorithm("a,b\n1,2\n3,4", algorithm=""))
-        assert result["status"] == "error"
+        with pytest.raises(ToolError):
+            run_algorithm("a,b\n1,2\n3,4", algorithm="")
 
 
 # ── discover ───────────────────────────────────────────────────────────
@@ -392,15 +384,14 @@ class TestDiscoverTool:
     def test_empty_csv(self):
         from causal_copilot.mcp.server import discover
 
-        result = json.loads(discover(""))
-        assert result["status"] == "error"
+        with pytest.raises(ToolError):
+            discover("")
 
     def test_too_few_rows(self):
         from causal_copilot.mcp.server import discover
 
-        result = json.loads(discover("a,b\n1,2\n3,4"))
-        assert result["status"] == "error"
-        assert "10 rows" in result["error"]
+        with pytest.raises(ToolError, match="10 rows"):
+            discover("a,b\n1,2\n3,4")
 
     def test_with_algorithm_override(self):
         from causal_copilot.mcp.server import discover

@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 from causal_copilot.mcp.artifacts import get_store
 from causal_copilot.mcp.bridge import (
@@ -35,12 +36,38 @@ from causal_discovery.pdag_policy import (
 
 mcp = FastMCP(
     "Causal-Copilot",
-    instructions=(
-        "Causal discovery expert. Use `discover` for autonomous causal analysis "
-        "(handles algorithm selection, tuning, and execution). Use `inspect_graph` "
-        "to analyze results and check inference eligibility. Use `diagnose_data` "
-        "and `run_algorithm` only for expert-level manual control."
-    ),
+    instructions="""\
+Causal discovery expert — turns any dataset into a causal graph.
+
+## Tools (4)
+1. **discover** — autonomous pipeline. Handles everything: data diagnosis, algorithm
+   selection, hyperparameter tuning, execution, postprocessing. Use for 90% of cases.
+2. **inspect_graph** — analyze a causal graph: classify (DAG/CPDAG/PAG), check if
+   causal effects are identifiable, assess specific treatment→outcome queries.
+   Always use after discover to answer follow-up causal questions.
+3. **diagnose_data** — get data statistics (linearity, gaussianity, missingness).
+   Expert mode only — discover does this automatically.
+4. **run_algorithm** — run a named algorithm with explicit hyperparameters.
+   Expert mode only — discover selects the best algorithm automatically.
+
+## Workflow
+- Default: discover(csv) → inspect_graph(run_id, treatment, outcome)
+- Expert: diagnose_data(csv) → run_algorithm(csv, algo) → inspect_graph(run_id)
+- If inspect_graph returns status="needs_more_input", follow its next_step field.
+
+## Resources (reference material)
+- causal://algorithms — list of all algorithms with descriptions
+- causal://algorithms/{name} — detailed profile for one algorithm
+- causal://hyperparameters/{name} — valid hyperparameters for an algorithm
+- causal://guides/ci-tests — how to choose CI tests
+- causal://guides/score-functions — how to choose score functions
+- causal://guides/interpreting-graphs — how to read DAG/CPDAG/PAG
+
+## Key Rules
+- CPDAG/PAG edges are NOT definitive directions — say so.
+- Always check inference_policy before claiming effects are identifiable.
+- discover already handles algorithm selection — don't manually select unless asked.
+""",
 )
 
 
@@ -111,10 +138,10 @@ def diagnose_data(csv_data: str) -> str:
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+        raise ToolError(f"Failed to parse CSV: {e}")
 
     if df.empty or df.shape[1] < 2:
-        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+        raise ToolError("Need at least 2 columns of data.")
 
     try:
         from preprocess.stat_info_functions import stat_info_collection
@@ -143,7 +170,28 @@ def diagnose_data(csv_data: str) -> str:
             "time_series": _jsonable(getattr(stats, "time_series", None)),
             "features": gs.user_data.selected_features,
         }
-        return json.dumps({"status": "ok", "diagnosis": diagnosis}, indent=2, cls=_NumpyEncoder)
+
+        # Recommend algorithm families based on diagnosis
+        recommendations = []
+        if diagnosis.get("time_series"):
+            recommendations.append("Time-series detected → PCMCI, VARLiNGAM")
+        elif diagnosis.get("linearity") is False:
+            recommendations.append("Nonlinear data → consider KCI-based tests")
+        elif diagnosis.get("gaussian_error") is False:
+            recommendations.append("Non-Gaussian → LiNGAM family gives unique DAG")
+        else:
+            recommendations.append("Linear + Gaussian → PC or GES (fast, standard)")
+
+        return json.dumps({
+            "status": "ok",
+            "diagnosis": diagnosis,
+            "recommendations": recommendations,
+            "resources": {
+                "ci_test_guide": "causal://guides/ci-tests",
+                "score_function_guide": "causal://guides/score-functions",
+                "algorithms": "causal://algorithms",
+            },
+        }, indent=2, cls=_NumpyEncoder)
     except Exception as e:
         return json.dumps({"status": "error", "error": f"Diagnosis failed: {e}"})
 
@@ -175,20 +223,20 @@ def run_algorithm(
         resolver_adjustments for full transparency).
     """
     if not algorithm or not algorithm.strip():
-        return json.dumps({"status": "error", "error": "algorithm must not be empty."})
+        raise ToolError("algorithm must not be empty.")
 
     try:
         hp = json.loads(hyperparameters)
     except json.JSONDecodeError as e:
-        return json.dumps({"status": "error", "error": f"Invalid hyperparameters JSON: {e}"})
+        raise ToolError(f"Invalid hyperparameters JSON: {e}")
 
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+        raise ToolError(f"Failed to parse CSV: {e}")
 
     if df.empty or df.shape[1] < 2:
-        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+        raise ToolError("Need at least 2 columns of data.")
 
     try:
         from causal_discovery.ci_test_resolver import resolve_ci_test
@@ -261,6 +309,15 @@ def run_algorithm(
         # Save to artifact store
         run_id = get_store().save(result)
         result["run_id"] = run_id
+        result["resources"] = {
+            "algorithm_profile": f"causal://algorithms/{algorithm}",
+            "hyperparameter_spec": f"causal://hyperparameters/{algorithm}",
+            "graph_guide": "causal://guides/interpreting-graphs",
+        }
+        result["next_steps"] = [
+            f"inspect_graph(run_id='{run_id}') to classify graph and check inference eligibility",
+            f"inspect_graph(run_id='{run_id}', treatment='X', outcome='Y') to assess specific causal query",
+        ]
 
         return json.dumps(result, indent=2, cls=_NumpyEncoder)
     except Exception as e:
@@ -296,16 +353,13 @@ def discover(
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        return json.dumps({"status": "error", "error": f"Failed to parse CSV: {e}"})
+        raise ToolError(f"Failed to parse CSV: {e}")
 
     if df.empty or df.shape[1] < 2:
-        return json.dumps({"status": "error", "error": "Need at least 2 columns of data."})
+        raise ToolError("Need at least 2 columns of data.")
 
     if len(df) < 10:
-        return json.dumps({
-            "status": "error",
-            "error": f"Need at least 10 rows of data (got {len(df)}).",
-        })
+        raise ToolError(f"Need at least 10 rows of data (got {len(df)}).")
 
     warnings: list[str] = []
 
@@ -421,6 +475,16 @@ def discover(
         run_id = get_store().save(result)
         result["run_id"] = run_id
 
+        algo = gs.algorithm.selected_algorithm or "unknown"
+        result["resources"] = {
+            "algorithm_profile": f"causal://algorithms/{algo}",
+            "graph_guide": "causal://guides/interpreting-graphs",
+        }
+        result["next_steps"] = [
+            f"inspect_graph(run_id='{run_id}') to classify graph and check inference eligibility",
+            f"inspect_graph(run_id='{run_id}', treatment='X', outcome='Y') to assess a specific causal query",
+        ]
+
         return json.dumps(result, indent=2, cls=_NumpyEncoder)
     except Exception as e:
         payload: dict[str, Any] = {
@@ -468,55 +532,37 @@ def inspect_graph(
     diagnosis = None
 
     if run_id and adjacency_matrix:
-        return json.dumps({
-            "status": "error",
-            "error": "run_id and adjacency_matrix are mutually exclusive.",
-        })
+        raise ToolError("run_id and adjacency_matrix are mutually exclusive.")
 
     if run_id:
         cached = get_store().get(run_id)
         if cached is None:
-            return json.dumps({
-                "status": "error",
-                "error": f"run_id '{run_id}' not found or expired.",
-            })
+            raise ToolError(f"run_id '{run_id}' not found or expired.")
         adj = np.array(cached["adjacency_matrix"])
         names = cached["node_names"]
         diagnosis = cached.get("data_diagnosis")
     elif adjacency_matrix:
         if not node_names:
-            return json.dumps({
-                "status": "error",
-                "error": "node_names required when using adjacency_matrix.",
-            })
+            raise ToolError("node_names required when using adjacency_matrix.")
         try:
             adj_list = json.loads(adjacency_matrix)
             names = json.loads(node_names)
         except (json.JSONDecodeError, TypeError) as e:
-            return json.dumps({"status": "error", "error": f"Invalid JSON: {e}"})
+            raise ToolError(f"Invalid JSON: {e}")
         adj = np.array(adj_list)
         if data_diagnosis:
             try:
                 diagnosis = json.loads(data_diagnosis)
             except json.JSONDecodeError as e:
-                return json.dumps({
-                    "status": "error",
-                    "error": f"Invalid data_diagnosis JSON: {e}",
-                })
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
     else:
-        return json.dumps({
-            "status": "error",
-            "error": "Provide either run_id or adjacency_matrix + node_names.",
-        })
+        raise ToolError("Provide either run_id or adjacency_matrix + node_names.")
 
     # --- Validate ---
     if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
-        return json.dumps({"status": "error", "error": "Adjacency matrix must be square."})
+        raise ToolError("Adjacency matrix must be square.")
     if adj.shape[0] != len(names):
-        return json.dumps({
-            "status": "error",
-            "error": f"Matrix dimension {adj.shape[0]} != {len(names)} node names.",
-        })
+        raise ToolError(f"Matrix dimension {adj.shape[0]} != {len(names)} node names.")
 
     # --- Graph analysis ---
     graph_kind = classify_graph_kind(adj)
@@ -588,25 +634,13 @@ def inspect_graph(
     query_assessment = None
     if treatment or outcome:
         if not treatment or not outcome:
-            return json.dumps({
-                "status": "error",
-                "error": "Both treatment and outcome must be provided together.",
-            })
+            raise ToolError("Both treatment and outcome must be provided together.")
         if treatment == outcome:
-            return json.dumps({
-                "status": "error",
-                "error": "Treatment and outcome must be different variables.",
-            })
+            raise ToolError("Treatment and outcome must be different variables.")
         if treatment not in names:
-            return json.dumps({
-                "status": "error",
-                "error": f"Treatment '{treatment}' not in node_names.",
-            })
+            raise ToolError(f"Treatment '{treatment}' not in node_names: {names}")
         if outcome not in names:
-            return json.dumps({
-                "status": "error",
-                "error": f"Outcome '{outcome}' not in node_names.",
-            })
+            raise ToolError(f"Outcome '{outcome}' not in node_names: {names}")
 
         src_idx = names.index(treatment)
         tgt_idx = names.index(outcome)
@@ -680,10 +714,30 @@ def inspect_graph(
         "summary": summary,
         "key_findings": key_findings,
         "limitations": limitations,
+        "resources": {
+            "graph_guide": "causal://guides/interpreting-graphs",
+        },
     }
 
     if query_assessment:
         result["query_assessment"] = query_assessment
+
+    # Contextual next steps based on graph state
+    next_steps = []
+    if graph_kind == "cpdag" and not inference_policy["eligibility"]:
+        next_steps.append(
+            "Try DirectLiNGAM via run_algorithm — LiNGAM gives unique DAG if errors are non-Gaussian"
+        )
+    if graph_kind == "pag":
+        next_steps.append(
+            "PAG detected — consider using PC (without latent variable assumption) for a CPDAG instead"
+        )
+    if not treatment and not outcome and inference_policy["eligibility"]:
+        next_steps.append(
+            "Specify treatment and outcome to assess a specific causal query"
+        )
+    if next_steps:
+        result["next_steps"] = next_steps
 
     return json.dumps(result, indent=2, cls=_NumpyEncoder)
 

@@ -537,9 +537,18 @@ def estimate_effect(
     is_linear = bool(diagnosis.get("linearity", True)) if diagnosis else True
     is_gaussian = bool(diagnosis.get("gaussian_error", True)) if diagnosis else True
 
+    # --- Time-series warning (causal effect estimation assumes i.i.d.) ---
+    if diagnosis and diagnosis.get("time_series"):
+        warnings_list: list[str] = [
+            "Time-series structure detected — causal effect estimation "
+            "assumes i.i.d. samples. Results may be biased if temporal "
+            "lag structure matters. Consider time-series-specific methods."
+        ]
+    else:
+        warnings_list: list[str] = []
+
     # --- Inference policy (honest gate) ---
     graph_kind = classify_graph_kind(adj)
-    warnings_list: list[str] = []
 
     if graph_kind == "dag":
         inference_policy = {

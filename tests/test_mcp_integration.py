@@ -48,7 +48,7 @@ class TestServerRegistration:
         from causal_copilot.mcp.server import mcp
 
         tools = asyncio.run(mcp.list_tools())
-        assert len(tools) == 12
+        assert len(tools) == 13
 
     def test_mcp_cli_entry(self):
         from causal_copilot.cli import main

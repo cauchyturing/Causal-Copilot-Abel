@@ -482,6 +482,26 @@ class TestEstimationDML:
         assert "att" in result
 
 
+class TestEstimationDRL:
+    def test_drl_basic(self):
+        from causal_copilot.mcp.estimation import estimate_drl
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        t = (z + rng.normal(size=n) > 0).astype(int)
+        y = 2.0 * t + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "T": t, "Y": y})
+        result = estimate_drl(
+            data, treatment="T", outcome="Y",
+            X_col=["Z"], W_col=["Z"],
+            T0=0, T1=1,
+        )
+        assert "ate" in result
+        assert result["ate"]["estimate"] is not None
+        assert "att" in result
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

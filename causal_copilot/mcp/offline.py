@@ -73,9 +73,9 @@ def get_default_estimation_config(method: str, data, treatment: str) -> dict:
     elif method == "drl":
         return {
             "algo": "LinearDRL",
-            "model_y": LinearRegression(),
-            "model_t": (LogisticRegressionCV(max_iter=1000)
-                        if binary else LinearRegression()),
+            "model_regression": LinearRegression(),
+            "model_propensity": (LogisticRegressionCV(max_iter=1000)
+                                 if binary else LinearRegression()),
         }
     else:
         raise ValueError(f"Unknown estimation method: {method}")

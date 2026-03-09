@@ -176,3 +176,82 @@ def estimate_dml(
             "p_value": None,
         },
     }
+
+
+def estimate_drl(
+    data: pd.DataFrame,
+    treatment: str,
+    outcome: str,
+    X_col: list[str],
+    W_col: list[str],
+    T0: float,
+    T1: float,
+) -> dict:
+    """Estimate ATE/ATT via Doubly Robust Learning (EconML).
+
+    Uses LinearDRLearner with LinearRegression defaults (no LLM needed).
+    Calls EconML directly (like estimate_linear calls DoWhy directly)
+    to avoid DataFrame/numpy incompatibilities in upstream wrappers.
+    """
+    from econml.dr import LinearDRLearner
+    from causal_copilot.mcp.offline import get_default_estimation_config
+
+    config = get_default_estimation_config("drl", data, treatment)
+
+    df = data.copy()
+    actual_W = list(W_col)
+    if len(actual_W) == 0:
+        df["_W_dummy"] = 0.0
+        actual_W = ["_W_dummy"]
+
+    Y = df[outcome].values
+    T = df[treatment].values
+    X = df[X_col].values
+    W = df[actual_W].values
+
+    model = LinearDRLearner(
+        model_regression=config["model_regression"],
+        model_propensity=config["model_propensity"],
+        cv=5,
+    )
+    model.fit(Y, T, X=X, W=W)
+
+    ate = float(model.ate(X=X, T0=T0, T1=T1))
+    try:
+        ate_lower, ate_upper = model.ate_interval(X=X, T0=T0, T1=T1)
+        ate_lower, ate_upper = float(ate_lower), float(ate_upper)
+    except Exception:
+        ate_lower = ate_upper = None
+
+    # ATT: average effect on treated units
+    treated = np.isclose(T, T1)
+    if treated.sum() > 0:
+        effects = model.effect(X[treated], T0=T0, T1=T1)
+        att = float(np.mean(effects))
+        try:
+            lb, ub = model.effect_interval(X[treated], T0=T0, T1=T1)
+            att_lower, att_upper = float(np.mean(lb)), float(np.mean(ub))
+        except Exception:
+            att_lower = att_upper = None
+    else:
+        att = att_lower = att_upper = None
+
+    def _safe_float(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return None
+        return float(v)
+
+    return {
+        "ate": {
+            "estimate": _safe_float(ate),
+            "ci_lower": _safe_float(ate_lower),
+            "ci_upper": _safe_float(ate_upper),
+            "p_value": None,
+        },
+        "att": {
+            "estimate": _safe_float(att),
+            "ci_lower": _safe_float(att_lower),
+            "ci_upper": _safe_float(att_upper),
+            "p_value": None,
+        },
+    }

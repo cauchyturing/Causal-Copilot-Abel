@@ -108,3 +108,71 @@ def estimate_matching(
             "p_value": None,
         },
     }
+
+
+def estimate_dml(
+    data: pd.DataFrame,
+    treatment: str,
+    outcome: str,
+    X_col: list[str],
+    W_col: list[str],
+    T0: float,
+    T1: float,
+) -> dict:
+    """Estimate ATE/ATT via Double Machine Learning (EconML).
+
+    Uses LinearDML with LinearRegression defaults (no LLM needed).
+    X_col = effect modifiers, W_col = confounders/controls.
+    """
+    from causal_copilot.mcp.offline import get_default_estimation_config
+
+    config = get_default_estimation_config("dml", data, treatment)
+
+    from causal_inference.DML.hte_program import HTE_Programming
+    from causal_copilot.mcp.bridge import make_args, make_global_state
+
+    gs = make_global_state(data)
+    gs.user_data.processed_data = data.copy()
+    gs.inference.hte_algo_json = {"name": config["algo"]}
+    gs.inference.hte_model_param = {
+        "model_y": config["model_y"],
+        "model_t": config["model_t"],
+    }
+    args = make_args()
+
+    # Ensure W_col is non-empty (DML requires controls)
+    df = data.copy()
+    actual_W = list(W_col)
+    if len(actual_W) == 0:
+        df["_W_dummy"] = 0.0
+        actual_W = ["_W_dummy"]
+        gs.user_data.processed_data = df
+
+    programmer = HTE_Programming(
+        args, y_col=outcome, T_col=treatment,
+        T0=T0, T1=T1, X_col=X_col, W_col=actual_W,
+    )
+    programmer.fit_model(gs)
+
+    ate, ate_lower, ate_upper = programmer.forward(gs, task="ate")
+    att, att_lower, att_upper = programmer.forward(gs, task="att")
+
+    def _safe_float(v):
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return None
+        return float(v)
+
+    return {
+        "ate": {
+            "estimate": _safe_float(ate),
+            "ci_lower": _safe_float(ate_lower),
+            "ci_upper": _safe_float(ate_upper),
+            "p_value": None,
+        },
+        "att": {
+            "estimate": _safe_float(att),
+            "ci_lower": _safe_float(att_lower),
+            "ci_upper": _safe_float(att_upper),
+            "p_value": None,
+        },
+    }

@@ -461,6 +461,27 @@ class TestEstimationMatching:
         assert 2.0 < ate < 4.0, f"ATE should be ~3.0, got {ate}"
 
 
+class TestEstimationDML:
+    def test_dml_basic(self):
+        from causal_copilot.mcp.estimation import estimate_dml
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        x = z + rng.normal(size=n) * 0.5
+        y = 2.0 * x + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "X": x, "Y": y})
+        result = estimate_dml(
+            data, treatment="X", outcome="Y",
+            X_col=["Z"], W_col=["Z"],
+            T0=0.0, T1=1.0,
+        )
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert ate is not None
+        assert "att" in result
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

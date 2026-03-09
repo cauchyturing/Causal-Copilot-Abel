@@ -51,3 +51,31 @@ def get_default_hp(algorithm: str, statistics) -> dict:
         hp["mvpc"] = True
 
     return hp
+
+
+def get_default_estimation_config(method: str, data, treatment: str) -> dict:
+    """Rule-based defaults for DML/DRL when LLM unavailable.
+
+    Returns dict with 'algo' name and sklearn model instances for
+    model_y and model_t.
+    """
+    from sklearn.linear_model import LinearRegression, LogisticRegressionCV
+
+    binary = data[treatment].nunique() <= 2
+
+    if method == "dml":
+        return {
+            "algo": "LinearDML",
+            "model_y": LinearRegression(),
+            "model_t": (LogisticRegressionCV(max_iter=1000)
+                        if binary else LinearRegression()),
+        }
+    elif method == "drl":
+        return {
+            "algo": "LinearDRL",
+            "model_y": LinearRegression(),
+            "model_t": (LogisticRegressionCV(max_iter=1000)
+                        if binary else LinearRegression()),
+        }
+    else:
+        raise ValueError(f"Unknown estimation method: {method}")

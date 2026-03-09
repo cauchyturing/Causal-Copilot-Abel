@@ -121,6 +121,411 @@ def _has_directed_path(adj: np.ndarray, src_idx: int, tgt_idx: int) -> bool:
     return False
 
 
+def _sanitize_for_estimation(adj: np.ndarray, node_names: list[str]):
+    """Drop undirected/bidirected edges for clean DAG estimation.
+
+    Returns (clean_adj, dropped_edges_list).
+    """
+    clean = adj.copy()
+    dropped = []
+    n = adj.shape[0]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if clean[i, j] != 0 and clean[j, i] != 0:
+                dropped.append(f"{node_names[i]} -- {node_names[j]}")
+                clean[i, j] = 0
+                clean[j, i] = 0
+    return clean, dropped
+
+
+def _identify_confounders(adj: np.ndarray, names: list[str], t_idx: int, o_idx: int) -> list[str]:
+    """Find shared parents of treatment and outcome in the graph.
+
+    adj[i,j]=1 means j→i. Parents of k = {j : adj[k,j] == 1}.
+    """
+    n = adj.shape[0]
+    t_parents = {j for j in range(n) if adj[t_idx, j] == 1 and j != t_idx}
+    o_parents = {j for j in range(n) if adj[o_idx, j] == 1 and j != o_idx}
+    shared = sorted(t_parents & o_parents)
+    return [names[j] for j in shared]
+
+
+def _adj_to_dot(adj: np.ndarray, names: list[str]) -> str:
+    """Convert adjacency matrix to DOT format for DoWhy. Only directed edges."""
+    edges = []
+    n = adj.shape[0]
+    for i in range(n):
+        for j in range(n):
+            if adj[i, j] == 1:  # j→i
+                edges.append(f"{names[j]} -> {names[i]}")
+    return "digraph { " + "; ".join(edges) + "; }"
+
+
+def _auto_select_method(data, treatment: str, diagnosis: dict | None) -> str:
+    """Rule-based method selection."""
+    if data[treatment].nunique() <= 2:
+        return "matching"
+    if diagnosis:
+        is_linear = diagnosis.get("linearity", False)
+        is_gaussian = diagnosis.get("gaussian_error", False)
+        if is_linear and is_gaussian:
+            return "linear"
+    return "dml"
+
+
+def _build_interpretation(treatment, outcome, method, estimates, confounders) -> str:
+    """Build human-readable interpretation string."""
+    ate_info = estimates.get("ate", {})
+    est = ate_info.get("estimate")
+    if est is None:
+        return f"Could not estimate the effect of {treatment} on {outcome}."
+
+    parts = [f"A one-unit increase in {treatment} causes {outcome} to change by {est:.4f}"]
+    ci_lo = ate_info.get("ci_lower")
+    ci_hi = ate_info.get("ci_upper")
+    if ci_lo is not None and ci_hi is not None:
+        parts.append(f"(95% CI: [{ci_lo:.4f}, {ci_hi:.4f}])")
+    p_val = ate_info.get("p_value")
+    if p_val is not None:
+        parts.append(f"(p={p_val:.4f})")
+    if confounders:
+        parts.append(f"adjusting for {', '.join(confounders)}")
+    return ", ".join(parts) + "."
+
+
+@mcp.tool()
+def estimate_effect(
+    treatment: str,
+    outcome: str,
+    run_id: str = "",
+    csv_data: str = "",
+    adjacency_matrix: str = "",
+    node_names: str = "",
+    method: str = "",
+    control_value: float = 0.0,
+    treatment_value: float = 1.0,
+    confounders: str = "",
+    data_diagnosis: str = "",
+) -> str:
+    """Estimate the causal effect of treatment on outcome.
+
+    Requires a causal graph (DAG preferred). Checks inference eligibility
+    before estimating — rejects if effects are not identifiable.
+
+    Two input modes (mutually exclusive):
+    1. run_id from discover/run_algorithm (preferred — includes cached data + graph)
+    2. csv_data + adjacency_matrix + node_names (standalone)
+
+    Args:
+        treatment: Treatment variable name
+        outcome: Outcome variable name
+        run_id: Run ID from a previous discover or run_algorithm call
+        csv_data: CSV string with header row
+        adjacency_matrix: JSON 2D array (mat[i][j]=1 means j causes i)
+        node_names: JSON array of variable names
+        method: Estimation method ("linear", "matching", "dml", "drl", or "" for auto)
+        control_value: Reference value for control group (default 0.0)
+        treatment_value: Reference value for treatment group (default 1.0)
+        confounders: JSON array of confounder names (default: auto-detect from graph)
+        data_diagnosis: JSON with linearity/gaussian_error (needed for CPDAG)
+
+    Returns:
+        JSON with status, estimates (ATE/ATT with CIs), confounders_used,
+        interpretation, provenance, run_id, next_steps
+    """
+    valid_methods = {"linear", "matching", "dml", "drl", ""}
+    if method not in valid_methods:
+        raise ToolError(
+            f"Unknown method '{method}'. Valid: linear, matching, dml, drl (or empty for auto)."
+        )
+
+    # --- Resolve inputs ---
+    adj = None
+    names = None
+    diagnosis = None
+    df = None
+
+    if run_id and csv_data:
+        raise ToolError("run_id and csv_data are mutually exclusive.")
+
+    if run_id:
+        cached = get_store().get(run_id)
+        if cached is None:
+            raise ToolError(f"run_id '{run_id}' not found or expired.")
+        adj = np.array(cached["adjacency_matrix"])
+        names = cached["node_names"]
+        diagnosis = cached.get("data_diagnosis")
+        stored_data = cached.get("_processed_data")
+        if stored_data is None:
+            raise ToolError(
+                f"run_id '{run_id}' has no stored data. "
+                "Re-run discover or run_algorithm to populate."
+            )
+        df = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
+    elif csv_data:
+        if not adjacency_matrix:
+            raise ToolError("adjacency_matrix required when using csv_data.")
+        if not node_names:
+            raise ToolError("node_names required when using csv_data.")
+        try:
+            df = pd.read_csv(io.StringIO(csv_data))
+        except Exception as e:
+            raise ToolError(f"Failed to parse CSV: {e}")
+        try:
+            adj = np.array(json.loads(adjacency_matrix))
+            names = json.loads(node_names)
+        except (json.JSONDecodeError, TypeError) as e:
+            raise ToolError(f"Invalid JSON: {e}")
+        if data_diagnosis:
+            try:
+                diagnosis = json.loads(data_diagnosis)
+            except json.JSONDecodeError as e:
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
+    else:
+        raise ToolError("Provide either run_id or csv_data + adjacency_matrix + node_names.")
+
+    # --- Validate ---
+    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
+        raise ToolError("Adjacency matrix must be square.")
+    if adj.shape[0] != len(names):
+        raise ToolError(f"Matrix dimension {adj.shape[0]} != {len(names)} node names.")
+    if treatment not in names:
+        raise ToolError(f"Treatment '{treatment}' not in node_names: {names}")
+    if outcome not in names:
+        raise ToolError(f"Outcome '{outcome}' not in node_names: {names}")
+    if treatment == outcome:
+        raise ToolError("Treatment and outcome must be different.")
+    if treatment not in df.columns:
+        raise ToolError(f"Treatment '{treatment}' not in data columns: {df.columns.tolist()}")
+    if outcome not in df.columns:
+        raise ToolError(f"Outcome '{outcome}' not in data columns: {df.columns.tolist()}")
+
+    # --- Inference policy (honest gate) ---
+    graph_kind = classify_graph_kind(adj)
+    warnings_list: list[str] = []
+
+    if graph_kind == "dag":
+        inference_policy = {
+            "eligibility": True,
+            "method": "standard",
+            "reason": "DAG — all causal effects identifiable",
+        }
+    elif graph_kind == "cpdag":
+        if diagnosis is None:
+            return json.dumps({
+                "status": "rejected",
+                "treatment": treatment,
+                "outcome": outcome,
+                "reason": "CPDAG requires data diagnosis to check inference eligibility. "
+                          "Use run_id from discover, or provide data_diagnosis.",
+                "graph_kind": "cpdag",
+                "next_steps": [
+                    "Use run_id from discover/run_algorithm (includes diagnosis)",
+                    "Provide data_diagnosis with linearity and gaussian_error fields",
+                ],
+            })
+        is_lg = bool(diagnosis.get("linearity")) and bool(diagnosis.get("gaussian_error"))
+        policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
+        if not policy["allow_inference"]:
+            return json.dumps({
+                "status": "rejected",
+                "treatment": treatment,
+                "outcome": outcome,
+                "reason": policy["reason"],
+                "graph_kind": "cpdag",
+                "inference_policy": {
+                    "eligibility": False,
+                    "reason": policy["reason"],
+                },
+                "next_steps": [
+                    "Try DirectLiNGAM via run_algorithm — gives unique DAG if errors are non-Gaussian",
+                    "Collect experimental data to resolve edge directions",
+                ],
+            })
+        inference_policy = {
+            "eligibility": True,
+            "method": policy["method"],
+            "reason": policy["reason"],
+        }
+        warnings_list.append("CPDAG: undirected edges dropped for estimation")
+    elif graph_kind == "pag":
+        return json.dumps({
+            "status": "rejected",
+            "treatment": treatment,
+            "outcome": outcome,
+            "reason": "PAG — latent confounders possible, effects not identifiable",
+            "graph_kind": "pag",
+            "inference_policy": {
+                "eligibility": False,
+                "reason": "PAG — latent confounders possible",
+            },
+            "next_steps": [
+                "Use PC (without latent variable assumption) for a CPDAG instead",
+                "Collect experimental data",
+            ],
+        })
+    else:
+        return json.dumps({
+            "status": "rejected",
+            "treatment": treatment,
+            "outcome": outcome,
+            "reason": f"Unknown graph kind: {graph_kind}",
+            "graph_kind": graph_kind,
+        })
+
+    # --- Sanitize graph ---
+    clean_adj, dropped_edges = _sanitize_for_estimation(adj, names)
+    if dropped_edges:
+        warnings_list.append(
+            f"Dropped {len(dropped_edges)} undirected/bidirected edges: "
+            + ", ".join(dropped_edges[:5])
+            + ("..." if len(dropped_edges) > 5 else "")
+        )
+
+    # --- Confounders ---
+    t_idx = names.index(treatment)
+    o_idx = names.index(outcome)
+    if confounders:
+        try:
+            conf_list = json.loads(confounders)
+        except json.JSONDecodeError as e:
+            raise ToolError(f"Invalid confounders JSON: {e}")
+        conf_source = "user-specified"
+    else:
+        conf_list = _identify_confounders(clean_adj, names, t_idx, o_idx)
+        conf_source = "auto-detected-from-graph"
+
+    # --- Method selection ---
+    selected_method = method if method else _auto_select_method(df, treatment, diagnosis)
+
+    # --- Run estimation ---
+    try:
+        from causal_copilot.mcp.estimation import (
+            estimate_linear,
+            estimate_matching,
+            estimate_dml,
+            estimate_drl,
+        )
+
+        if selected_method == "linear":
+            dot_graph = _adj_to_dot(clean_adj, names)
+            with _pipeline_cwd():
+                estimates = estimate_linear(
+                    df, dot_graph, treatment, outcome,
+                    control_value, treatment_value,
+                )
+            method_detail = "DoWhy backdoor.linear_regression"
+
+        elif selected_method == "matching":
+            match_conf = conf_list if conf_list else [
+                c for c in names if c != treatment and c != outcome
+            ]
+            with _pipeline_cwd():
+                estimates = estimate_matching(
+                    df, treatment, outcome, match_conf,
+                    int(control_value), int(treatment_value),
+                )
+            method_detail = "Propensity Score Matching (sklearn)"
+
+        elif selected_method == "dml":
+            X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]
+            if not X_col:
+                X_col = conf_list[:] if conf_list else [c for c in names if c != treatment and c != outcome]
+            W_col = conf_list if conf_list else []
+            with _pipeline_cwd():
+                estimates = estimate_dml(
+                    df, treatment, outcome, X_col, W_col,
+                    control_value, treatment_value,
+                )
+            method_detail = "Double Machine Learning (EconML LinearDML)"
+
+        elif selected_method == "drl":
+            X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]
+            if not X_col:
+                X_col = conf_list[:] if conf_list else [c for c in names if c != treatment and c != outcome]
+            W_col = conf_list if conf_list else []
+            with _pipeline_cwd():
+                estimates = estimate_drl(
+                    df, treatment, outcome, X_col, W_col,
+                    control_value, treatment_value,
+                )
+            method_detail = "Doubly Robust Learning (EconML LinearDRL)"
+        else:
+            raise ToolError(f"Unknown method '{selected_method}'.")
+
+    except ToolError:
+        raise
+    except Exception as e:
+        return json.dumps({
+            "status": "error",
+            "treatment": treatment,
+            "outcome": outcome,
+            "method": selected_method,
+            "error": f"Estimation failed: {e}",
+            "next_steps": [
+                "Try a different method (linear, matching, dml, drl)",
+                "Check that treatment and outcome columns contain valid numeric data",
+            ],
+        })
+
+    # --- Build result ---
+    interpretation = _build_interpretation(
+        treatment, outcome, selected_method, estimates, conf_list,
+    )
+
+    result_payload: dict[str, Any] = {
+        "status": "ok",
+        "treatment": treatment,
+        "outcome": outcome,
+        "method": selected_method,
+        "method_detail": method_detail,
+        "estimates": estimates,
+        "confounders_used": conf_list,
+        "confounders_source": conf_source,
+        "graph_kind": graph_kind,
+        "interpretation": interpretation,
+        "provenance": {
+            "method": selected_method,
+            "inference_policy": inference_policy,
+            "llm_used": False,
+            "n_observations": len(df),
+            "graph_sanitization": {"edges_dropped": len(dropped_edges)},
+        },
+    }
+
+    if warnings_list:
+        result_payload["warnings"] = warnings_list
+
+    # Save to artifact store
+    est_run_id = get_store().save(result_payload)
+    result_payload["run_id"] = est_run_id
+
+    # Resources + next steps
+    result_payload["resources"] = {
+        "graph_guide": "causal://guides/interpreting-graphs",
+    }
+    next_steps = []
+    if selected_method != "dml":
+        next_steps.append(
+            f"estimate_effect(treatment='{treatment}', outcome='{outcome}', method='dml') "
+            "for heterogeneous treatment effects"
+        )
+    if selected_method != "linear":
+        next_steps.append(
+            f"estimate_effect(treatment='{treatment}', outcome='{outcome}', method='linear') "
+            "for simple linear estimate with p-value"
+        )
+    other_outcomes = [n for n in names if n != treatment and n != outcome]
+    if other_outcomes:
+        alt = other_outcomes[0]
+        next_steps.append(
+            f"estimate_effect(treatment='{treatment}', outcome='{alt}') to test another query"
+        )
+    result_payload["next_steps"] = next_steps
+
+    return json.dumps(result_payload, indent=2, cls=_NumpyEncoder)
+
+
 @mcp.tool()
 def diagnose_data(csv_data: str) -> str:
     """Analyze dataset statistical characteristics for causal discovery.

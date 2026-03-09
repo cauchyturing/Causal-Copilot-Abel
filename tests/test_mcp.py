@@ -502,6 +502,113 @@ class TestEstimationDRL:
         assert "att" in result
 
 
+# ── estimate_effect ───────────────────────────────────────────────────
+
+
+class TestEstimateEffectTool:
+    def _make_linear_data_csv(self, rng, n=200):
+        """Y = 2*X + Z + noise. DAG: Z→X, Z→Y, X→Y."""
+        z = rng.normal(size=n)
+        x = z + rng.normal(size=n) * 0.5
+        y = 2.0 * x + z + rng.normal(size=n) * 0.5
+        lines = ["Z,X,Y"]
+        for i in range(n):
+            lines.append(f"{z[i]},{x[i]},{y[i]}")
+        return "\n".join(lines)
+
+    def test_linear_with_adj(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        rng = np.random.default_rng(42)
+        csv = self._make_linear_data_csv(rng)
+        # DAG: Z→X (adj[1,0]=1), Z→Y (adj[2,0]=1), X→Y (adj[2,1]=1)
+        adj = "[[0,0,0],[1,0,0],[1,1,0]]"
+        names = '["Z","X","Y"]'
+        result = json.loads(estimate_effect(
+            treatment="X", outcome="Y",
+            csv_data=csv, adjacency_matrix=adj, node_names=names,
+            method="linear",
+        ))
+        assert result["status"] == "ok"
+        assert result["method"] == "linear"
+        ate = result["estimates"]["ate"]["estimate"]
+        assert 1.0 < ate < 3.0, f"ATE should be ~2.0, got {ate}"
+        assert "confounders_used" in result
+        assert "provenance" in result
+        assert "next_steps" in result
+
+    def test_rejected_pag(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        rng = np.random.default_rng(42)
+        csv = self._make_linear_data_csv(rng)
+        # PAG: adj[0,1]=3, adj[1,0]=3
+        adj = "[[0,3],[3,0]]"
+        names = '["X","Y"]'
+        result = json.loads(estimate_effect(
+            treatment="X", outcome="Y",
+            csv_data=csv, adjacency_matrix=adj, node_names=names,
+        ))
+        assert result["status"] == "rejected"
+        assert "next_steps" in result
+
+    def test_rejected_cpdag_nonlinear(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        rng = np.random.default_rng(42)
+        csv = self._make_linear_data_csv(rng)
+        # CPDAG: adj[0,1]=2, adj[1,0]=2
+        adj = "[[0,2],[2,0]]"
+        names = '["X","Y"]'
+        diag = '{"linearity": false, "gaussian_error": true}'
+        result = json.loads(estimate_effect(
+            treatment="X", outcome="Y",
+            csv_data=csv, adjacency_matrix=adj, node_names=names,
+            data_diagnosis=diag,
+        ))
+        assert result["status"] == "rejected"
+
+    def test_treatment_not_in_data(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        with pytest.raises(ToolError, match="MISSING"):
+            estimate_effect(
+                treatment="MISSING", outcome="Y",
+                csv_data="X,Y\n1,2\n3,4",
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["X","Y"]',
+            )
+
+    def test_mutual_exclusion(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        with pytest.raises(ToolError, match="mutually exclusive"):
+            estimate_effect(
+                treatment="X", outcome="Y",
+                run_id="abc", csv_data="x,y\n1,2",
+            )
+
+    def test_no_input(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        with pytest.raises(ToolError):
+            estimate_effect(treatment="X", outcome="Y")
+
+    def test_invalid_method(self):
+        from causal_copilot.mcp.server import estimate_effect
+
+        rng = np.random.default_rng(42)
+        csv = self._make_linear_data_csv(rng)
+        adj = "[[0,0,0],[1,0,0],[1,1,0]]"
+        names = '["Z","X","Y"]'
+        with pytest.raises(ToolError, match="bogus"):
+            estimate_effect(
+                treatment="X", outcome="Y",
+                csv_data=csv, adjacency_matrix=adj, node_names=names,
+                method="bogus",
+            )
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

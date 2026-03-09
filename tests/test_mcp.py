@@ -983,10 +983,10 @@ class TestAttributeDistributionChangeTool:
         from causal_copilot.mcp.server import attribute_distribution_change
 
         rng = np.random.default_rng(42)
-        csv_old = _make_gcm_csv(rng, n=200)
+        csv_old = _make_gcm_csv(rng, n=500)
         # New data with shifted A (causes downstream changes)
         rng2 = np.random.default_rng(99)
-        n = 200
+        n = 500
         a = rng2.normal(loc=3.0, size=n)  # shifted mean
         b = 2.0 * a + rng2.normal(size=n) * 0.5
         c = 1.5 * b + 0.5 * a + rng2.normal(size=n) * 0.5
@@ -1005,7 +1005,7 @@ class TestAttributeDistributionChangeTool:
                 node_names=_GCM_NAMES,
             )
         )
-        assert result["status"] == "ok"
+        assert result["status"] == "ok", f"Distribution change failed: {result.get('error', 'unknown')}"
         assert "attributions" in result
         assert "interpretation" in result
 

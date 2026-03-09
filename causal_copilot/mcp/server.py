@@ -490,8 +490,17 @@ def estimate_effect(
 
     # Parse user-provided T0/T1 or leave as None for auto-detection.
     # Auto-detect: binary/discrete → min/max, continuous → 10th/90th percentile.
-    T0_input = float(control_value) if control_value else None
-    T1_input = float(treatment_value) if treatment_value else None
+    # Use try/except for float() to support categorical string values (e.g., "A", "B").
+    def _parse_tv(val):
+        if not val:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return val  # categorical string
+
+    T0_input = _parse_tv(control_value)
+    T1_input = _parse_tv(treatment_value)
     _, T0_computed, T1_computed, treatment_kind = prepare_treatment(df, treatment, T0=T0_input, T1=T1_input)
     control_value = T0_computed
     treatment_value = T1_computed

@@ -820,8 +820,8 @@ class CausalCopilot:
                     treatment,
                     outcome,
                     match_conf,
-                    int(control_value),
-                    int(treatment_value),
+                    control_value,
+                    treatment_value,
                 )
             elif selected_method == "dml":
                 X_col = [c for c in names if c != treatment and c != outcome and c not in conf_list]

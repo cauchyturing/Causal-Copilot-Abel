@@ -77,6 +77,12 @@ def prepare_treatment(
     """
     treatment_col = data[treatment]
 
+    if treatment_col.nunique() < 2:
+        raise ValueError(
+            f"Treatment '{treatment}' has {treatment_col.nunique()} unique value(s). "
+            "Need at least 2 distinct values for causal effect estimation."
+        )
+
     # Case 1: String / object / category
     if treatment_col.dtype == "object" or treatment_col.dtype.name == "category":
         unique_vals = sorted(treatment_col.unique().tolist())

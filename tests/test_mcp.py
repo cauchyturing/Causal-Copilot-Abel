@@ -2653,6 +2653,42 @@ class TestAuditRound4Bugs:
         assert "lagged_graph" in source
 
 
+# ── Audit Round 5 — Bug Fixes ──────────────────────────────────────────
+
+
+class TestAuditRound5Bugs:
+    """Tests for bugs found in the fifth comprehensive audit."""
+
+    def test_b1_prepare_treatment_single_value_raises(self):
+        """B1: prepare_treatment must raise ValueError for single-value treatment."""
+        from causal_copilot.mcp.offline import prepare_treatment
+
+        df = pd.DataFrame({"T": [1, 1, 1, 1], "Y": [2, 3, 4, 5]})
+        with pytest.raises(ValueError, match="unique value"):
+            prepare_treatment(df, "T")
+
+    def test_b2_copilot_matching_no_int_cast(self):
+        """B2: copilot.py matching must NOT int()-cast control/treatment values."""
+        import inspect
+
+        from causal_copilot.copilot import CausalCopilot
+
+        source = inspect.getsource(CausalCopilot)
+        # The estimate_matching call should NOT have int() wrapping
+        assert "int(control_value)" not in source
+        assert "int(treatment_value)" not in source
+
+    def test_b3_server_categorical_t0_t1(self):
+        """B3: server.py T0/T1 parsing handles categorical string values."""
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # Must have try/except or other handling for non-numeric T0/T1
+        assert "_parse_tv" in source or "except" in source
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

@@ -23,5 +23,8 @@ statsmodels>=0.14
 causal-learn>=0.1.3.7
 lingam>=1.8
 
+# Process utilities (used by DoWhy GCM internals)
+psutil>=5.9
+
 # LLM client (for full pipeline; graceful fallback without API key)
 openai>=1.0

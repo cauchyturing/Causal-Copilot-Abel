@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev,algorithms,agent]"
+      - run: pip install -e ".[dev,algorithms,agent,mcp,inference]"
       - run: python -m pytest tests/ benchmarks/ -v -m "not slow" --tb=short
 
   build-wheel:

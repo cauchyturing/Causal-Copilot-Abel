@@ -521,6 +521,7 @@ def estimate_effect(
 
     # --- Data properties for intelligent method/model selection ---
     from causal_copilot.mcp.offline import (
+        get_default_estimation_config as _offline_select_method_config,
         identify_confounders as _offline_confounders,
         prepare_treatment,
         select_estimation_method as _offline_select_method,
@@ -728,7 +729,10 @@ def estimate_effect(
 
         elif selected_method == "metalearner":
             X_col = [c for c in names if c != treatment and c != outcome]
-            learner_type = "t" if is_linear else "x"
+            ml_config = _offline_select_method_config(
+                "metalearner", df, treatment, is_linear=is_linear,
+            )
+            learner_type = ml_config.get("learner", "t")
             with _pipeline_cwd():
                 estimates = estimate_metalearner(
                     df,
@@ -1146,6 +1150,15 @@ def run_algorithm(
                     "warnings": _ra_warnings,
                 }
 
+            # Time-series mismatch warning
+            is_ts = getattr(gs.statistics, "time_series", False)
+            ts_algos = {"PCMCI", "VARLiNGAM", "GrangerCausality", "TiMINO", "DYNOTEARS"}
+            if is_ts and algorithm not in ts_algos:
+                resolver_adjustments["time_series_warning"] = (
+                    f"Time-series data detected but '{algorithm}' is not temporal. "
+                    f"Consider: {', '.join(sorted(ts_algos))}"
+                )
+
             gs.algorithm.algorithm_arguments = algo_args
 
             gs = Programming(args).forward(gs)
@@ -1304,8 +1317,18 @@ def discover(
                     )
                     used_planner = "rule-based-fallback"
 
-            # 3. Resolver overrides (CI test / score func)
+            # 2b. Time-series algorithm alignment
+            is_ts = getattr(gs.statistics, "time_series", False)
+            ts_algos = {"PCMCI", "VARLiNGAM", "GrangerCausality", "TiMINO", "DYNOTEARS"}
             algo_name = gs.algorithm.selected_algorithm
+            if is_ts and algo_name not in ts_algos:
+                warnings.append(
+                    f"Time-series data detected but non-temporal algorithm '{algo_name}' "
+                    f"selected. Recommended: {', '.join(sorted(ts_algos))}. "
+                    f"Results may miss temporal lag structure."
+                )
+
+            # 3. Resolver overrides (CI test / score func)
             algo_args = dict(gs.algorithm.algorithm_arguments or {})
 
             ci_test_algos = {

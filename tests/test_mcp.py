@@ -737,6 +737,120 @@ class TestEstimationMetaLearner:
         assert "att" in result
 
 
+    def test_slearner_basic(self):
+        from causal_copilot.mcp.estimation import estimate_metalearner
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        t = (z + rng.normal(size=n) > 0).astype(int)
+        y = 3.0 * t + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "T": t, "Y": y})
+        result = estimate_metalearner(
+            data,
+            treatment="T",
+            outcome="Y",
+            X_col=["Z"],
+            T0=0,
+            T1=1,
+            learner="s",
+        )
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert ate is not None
+        assert result["algo"] == "SLearner"
+
+    def test_xlearner_basic(self):
+        from causal_copilot.mcp.estimation import estimate_metalearner
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        t = (z + rng.normal(size=n) > 0).astype(int)
+        y = 3.0 * t + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "T": t, "Y": y})
+        result = estimate_metalearner(
+            data,
+            treatment="T",
+            outcome="Y",
+            X_col=["Z"],
+            T0=0,
+            T1=1,
+            learner="x",
+        )
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert ate is not None
+        assert result["algo"] == "XLearner"
+
+    def test_dalearner_basic(self):
+        from causal_copilot.mcp.estimation import estimate_metalearner
+
+        rng = np.random.default_rng(42)
+        n = 300
+        z = rng.normal(size=n)
+        t = (z + rng.normal(size=n) > 0).astype(int)
+        y = 3.0 * t + z + rng.normal(size=n) * 0.5
+        data = pd.DataFrame({"Z": z, "T": t, "Y": y})
+        result = estimate_metalearner(
+            data,
+            treatment="T",
+            outcome="Y",
+            X_col=["Z"],
+            T0=0,
+            T1=1,
+            learner="da",
+        )
+        assert "ate" in result
+        ate = result["ate"]["estimate"]
+        assert ate is not None
+        assert result["algo"] == "DALearner"
+
+
+class TestMetaLearnerSelection:
+    """Test data-driven MetaLearner selection heuristic."""
+
+    def test_linear_balanced_selects_tlearner(self):
+        from causal_copilot.mcp.offline import get_default_estimation_config
+
+        rng = np.random.default_rng(42)
+        n = 300
+        t = rng.choice([0, 1], size=n, p=[0.5, 0.5])  # balanced
+        data = pd.DataFrame({"T": t, "Y": rng.normal(size=n), "X": rng.normal(size=n)})
+        config = get_default_estimation_config("metalearner", data, "T", outcome="Y", is_linear=True)
+        assert config["learner"] == "t"
+
+    def test_nonlinear_balanced_selects_xlearner(self):
+        from causal_copilot.mcp.offline import get_default_estimation_config
+
+        rng = np.random.default_rng(42)
+        n = 300
+        t = rng.choice([0, 1], size=n, p=[0.5, 0.5])
+        data = pd.DataFrame({"T": t, "Y": rng.normal(size=n), "X": rng.normal(size=n)})
+        config = get_default_estimation_config("metalearner", data, "T", outcome="Y", is_linear=False)
+        assert config["learner"] == "x"
+
+    def test_nonlinear_imbalanced_selects_dalearner(self):
+        from causal_copilot.mcp.offline import get_default_estimation_config
+
+        rng = np.random.default_rng(42)
+        n = 300
+        t = rng.choice([0, 1], size=n, p=[0.9, 0.1])  # heavily imbalanced
+        data = pd.DataFrame({"T": t, "Y": rng.normal(size=n), "X": rng.normal(size=n)})
+        config = get_default_estimation_config("metalearner", data, "T", outcome="Y", is_linear=False)
+        assert config["learner"] == "da"
+
+    def test_small_sample_selects_slearner(self):
+        from causal_copilot.mcp.offline import get_default_estimation_config
+
+        rng = np.random.default_rng(42)
+        n = 50  # small sample
+        t = rng.choice([0, 1], size=n)
+        data = pd.DataFrame({"T": t, "Y": rng.normal(size=n), "X": rng.normal(size=n)})
+        config = get_default_estimation_config("metalearner", data, "T", outcome="Y", is_linear=False)
+        assert config["learner"] == "s"
+
+
 class TestEstimationIV:
     def test_iv_basic(self):
         from causal_copilot.mcp.estimation import estimate_iv

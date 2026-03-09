@@ -231,10 +231,11 @@ def estimate_drl(
 ) -> dict:
     """Estimate ATE/ATT/HTE via Doubly Robust Learning (EconML).
 
-    Uses data-driven model selection. Calls EconML directly to avoid
-    DataFrame/numpy incompatibilities in upstream wrappers.
+    Uses data-driven variant selection (LinearDRL/SparseLinearDRL/ForestDRL)
+    via offline heuristics, then calls EconML directly with numpy arrays to
+    avoid DataFrame/numpy incompatibilities in upstream wrappers.
     """
-    from econml.dr import LinearDRLearner
+    from econml.dr import ForestDRLearner, LinearDRLearner, SparseLinearDRLearner
 
     from causal_copilot.mcp.offline import get_default_estimation_config
 
@@ -256,11 +257,25 @@ def estimate_drl(
     X = df[X_col].values
     W = df[actual_W].values
 
-    model = LinearDRLearner(
-        model_regression=config.get("model_regression"),
-        model_propensity=config.get("model_propensity"),
-        cv=5,
-    )
+    # Dispatch to correct DRL variant based on offline selection
+    algo = config["algo"]
+    if algo == "ForestDRL":
+        model = ForestDRLearner(
+            model_regression=config.get("model_regression"),
+            model_propensity=config.get("model_propensity"),
+        )
+    elif algo == "SparseLinearDRL":
+        model = SparseLinearDRLearner(
+            model_regression=config.get("model_regression"),
+            model_propensity=config.get("model_propensity"),
+            cv=5,
+        )
+    else:  # LinearDRL (default)
+        model = LinearDRLearner(
+            model_regression=config.get("model_regression"),
+            model_propensity=config.get("model_propensity"),
+            cv=5,
+        )
     model.fit(Y, T, X=X, W=W)
 
     ate = float(model.ate(X=X, T0=T0, T1=T1))
@@ -328,10 +343,11 @@ def estimate_metalearner(
     *,
     compute_hte: bool = True,
 ) -> dict:
-    """Estimate ATE/ATT/HTE via EconML Meta-Learners (S/T/X).
+    """Estimate ATE/ATT/HTE via EconML Meta-Learners (S/T/X/DA).
 
     Binary treatment required. Auto-binarizes if needed.
-    learner: "s" (SLearner), "t" (TLearner), "x" (XLearner).
+    learner: "s" (SLearner), "t" (TLearner), "x" (XLearner),
+             "da" (DomainAdaptationLearner).
     Uses BootstrapInference(n=100), matching the original pipeline.
     """
     from econml.inference import BootstrapInference
@@ -364,8 +380,21 @@ def estimate_metalearner(
             models=base_model,
             propensity_model=LogisticRegression(max_iter=1000),
         )
+    elif learner == "da":
+        from econml.metalearners import DomainAdaptationLearner
+        try:
+            from xgboost import XGBRegressor
+            base_model = XGBRegressor(objective="reg:squarederror", n_estimators=100)
+        except ImportError:
+            from sklearn.ensemble import GradientBoostingRegressor
+            base_model = GradientBoostingRegressor(n_estimators=100)
+        model = DomainAdaptationLearner(
+            models=base_model,
+            final_models=base_model,
+            propensity_model=LogisticRegression(max_iter=1000),
+        )
     else:
-        raise ValueError(f"Unknown learner: '{learner}'. Use 's', 't', or 'x'.")
+        raise ValueError(f"Unknown learner: '{learner}'. Use 's', 't', 'x', or 'da'.")
 
     model.fit(Y, T, X=X, inference=BootstrapInference(n_bootstrap_samples=100))
 

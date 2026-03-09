@@ -263,9 +263,25 @@ def select_models_for_method(
         return config
 
     if method == "metalearner":
-        if is_linear:
+        # Selection heuristic matching main.py's MetaLearners/hte_filter.py:
+        #   S-Learner: homogeneous effects, small samples, or baseline
+        #   T-Learner: linear data, balanced treatment groups
+        #   X-Learner: non-linear data OR imbalanced treatment groups
+        #   DA-Learner: non-linear + imbalanced (domain adaptation)
+        t_counts = data[treatment].value_counts()
+        imbalance_ratio = t_counts.min() / t_counts.max() if len(t_counts) > 1 else 1.0
+        imbalanced = imbalance_ratio < 0.3
+        small_sample = len(data) < 100
+
+        if small_sample:
+            return {"algo": "SLearner", "learner": "s"}
+        if is_linear and not imbalanced:
             return {"algo": "TLearner", "learner": "t"}
-        return {"algo": "XLearner", "learner": "x"}
+        if not is_linear and imbalanced:
+            return {"algo": "DomainAdaptationLearner", "learner": "da"}
+        if not is_linear or imbalanced:
+            return {"algo": "XLearner", "learner": "x"}
+        return {"algo": "TLearner", "learner": "t"}
 
     if method == "iv":
         return {"algo": "LinearDRIV"}

@@ -1,4 +1,4 @@
-"""Tests for the MCP server tools (4-tool contract: discover, inspect_graph, diagnose_data, run_algorithm)."""
+"""Tests for the MCP server tools (5-tool contract: discover, inspect_graph, estimate_effect, diagnose_data, run_algorithm)."""
 
 import json
 from unittest.mock import patch
@@ -607,6 +607,38 @@ class TestEstimateEffectTool:
                 csv_data=csv, adjacency_matrix=adj, node_names=names,
                 method="bogus",
             )
+
+    def test_run_id_from_run_algorithm(self):
+        from causal_copilot.mcp.artifacts import get_store
+        from causal_copilot.mcp.server import estimate_effect, run_algorithm
+
+        rng = np.random.default_rng(42)
+        n = 200
+        z = rng.normal(size=n)
+        x = z + rng.normal(size=n) * 0.5
+        y = 2.0 * x + z + rng.normal(size=n) * 0.5
+        lines = ["Z,X,Y"]
+        for i in range(n):
+            lines.append(f"{z[i]},{x[i]},{y[i]}")
+        csv = "\n".join(lines)
+
+        with _mock_run_algorithm():
+            algo_result = json.loads(run_algorithm(csv, algorithm="PC"))
+        assert algo_result["status"] == "ok"
+        rid = algo_result["run_id"]
+
+        # Mock graph: Z→X, Z→Y, X→Y (DAG)
+        cached = get_store().get(rid)
+        cached["adjacency_matrix"] = [[0, 0, 0], [1, 0, 0], [1, 1, 0]]
+        cached["node_names"] = ["Z", "X", "Y"]
+        cached["data_diagnosis"] = {"linearity": True, "gaussian_error": True}
+
+        result = json.loads(estimate_effect(
+            treatment="X", outcome="Y",
+            run_id=rid, method="linear",
+        ))
+        assert result["status"] == "ok"
+        assert 1.0 < result["estimates"]["ate"]["estimate"] < 3.0
 
 
 # ── MCP CLI ────────────────────────────────────────────────────────────

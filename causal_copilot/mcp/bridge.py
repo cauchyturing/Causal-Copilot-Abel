@@ -147,6 +147,16 @@ def serialize_result(gs, node_names=None, provenance=None):
         adj = gs.results.converted_graph
     if adj is None:
         adj = gs.results.raw_result
+
+    # Handle time-series lagged_graph (3D array: [n_lags, n_vars, n_vars])
+    # Collapse into a 2D summary graph for serialization.
+    lagged = getattr(gs.results, "lagged_graph", None)
+    if adj is None and lagged is not None:
+        import numpy as _np
+
+        adj = _np.any(lagged, axis=0).astype(int)
+        used_revised = False
+
     if adj is None:
         return {"status": "error", "error": "No graph produced"}
 

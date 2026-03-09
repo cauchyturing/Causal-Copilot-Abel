@@ -291,9 +291,13 @@ class CausalCopilot:
             old_cwd = os.getcwd()
             os.chdir(str(PIPELINE_ROOT))
             try:
-                from preprocess.stat_info_functions import stat_info_collection
+                from preprocess.stat_info_functions import (
+                    convert_stat_info_to_text,
+                    stat_info_collection,
+                )
 
                 gs = stat_info_collection(gs)
+                gs.statistics.description = convert_stat_info_to_text(gs.statistics)
                 pipeline_available = True
             finally:
                 os.chdir(old_cwd)
@@ -503,9 +507,11 @@ class CausalCopilot:
                 gs.user_data.processed_data = numeric_df
                 gs.user_data.selected_features = list(numeric_df.columns)
 
-                # Postprocess: skip Judge for time-series data (main.py behavior)
+                # Postprocess: skip Judge for time-series data when lagged_graph
+                # exists (main.py:268: time_series AND lagged_graph is not None)
                 is_ts = getattr(gs.statistics, "time_series", False)
-                if is_ts:
+                has_lagged = getattr(gs.results, "lagged_graph", None) is not None
+                if is_ts and has_lagged:
                     gs.results.revised_graph = gs.results.converted_graph
                 else:
                     old_cwd = os.getcwd()
@@ -1442,8 +1448,13 @@ class CausalCopilot:
                 eda.generate_eda()
             except Exception as eda_err:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
-                if not hasattr(gs.results, "eda") or gs.results.eda is None:
-                    gs.results.eda = {}
+                # Set minimal eda with required keys to prevent KeyError in
+                # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
+                if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
+                    gs.results.eda = {
+                        "plot_path_dist": [""],
+                        "plot_path_corr": [""],
+                    }
 
             # 2. Visualizations
             try:

@@ -31,7 +31,12 @@ class RunStore:
         return run_id
 
     def get(self, run_id):
-        """Retrieve run data by ID. Returns None if expired or missing."""
+        """Retrieve run data by ID. Returns None if expired or missing.
+
+        Extends TTL on successful access (touch-on-read) so long-running
+        workflows (discover → inspect → estimate → report) don't expire
+        mid-chain.
+        """
         with self._lock:
             entry = self._runs.get(run_id)
             if entry is None:
@@ -39,6 +44,8 @@ class RunStore:
             if time.time() - entry["created_at"] > self.ttl_seconds:
                 del self._runs[run_id]
                 return None
+            # Touch: reset TTL on successful read
+            entry["created_at"] = time.time()
             return entry["data"]
 
     def cleanup(self):

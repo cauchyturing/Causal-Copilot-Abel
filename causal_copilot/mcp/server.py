@@ -455,53 +455,12 @@ def estimate_effect(
             f"Unknown method '{method}'. Valid: linear, matching, dml, drl, metalearner, iv (or empty for auto)."
         )
 
-    # --- Resolve inputs ---
-    adj = None
-    names = None
-    diagnosis = None
-    df = None
+    # --- Resolve inputs (reuse shared resolver) ---
+    df, adj, names, diagnosis = _resolve_data_and_graph(
+        run_id, csv_data, adjacency_matrix, node_names, data_diagnosis, require_data=True
+    )
 
-    if run_id and csv_data:
-        raise ToolError("run_id and csv_data are mutually exclusive.")
-
-    if run_id:
-        cached = get_store().get(run_id)
-        if cached is None:
-            raise ToolError(f"run_id '{run_id}' not found or expired.")
-        adj = np.array(cached["adjacency_matrix"])
-        names = cached["node_names"]
-        diagnosis = cached.get("data_diagnosis")
-        stored_data = cached.get("_processed_data")
-        if stored_data is None:
-            raise ToolError(f"run_id '{run_id}' has no stored data. Re-run discover or run_algorithm to populate.")
-        df = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
-    elif csv_data:
-        if not adjacency_matrix:
-            raise ToolError("adjacency_matrix required when using csv_data.")
-        if not node_names:
-            raise ToolError("node_names required when using csv_data.")
-        try:
-            df = pd.read_csv(io.StringIO(csv_data))
-        except Exception as e:
-            raise ToolError(f"Failed to parse CSV: {e}") from e
-        try:
-            adj = np.array(json.loads(adjacency_matrix))
-            names = json.loads(node_names)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise ToolError(f"Invalid JSON: {e}") from e
-        if data_diagnosis:
-            try:
-                diagnosis = json.loads(data_diagnosis)
-            except json.JSONDecodeError as e:
-                raise ToolError(f"Invalid data_diagnosis JSON: {e}") from e
-    else:
-        raise ToolError("Provide either run_id or csv_data + adjacency_matrix + node_names.")
-
-    # --- Validate ---
-    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
-        raise ToolError("Adjacency matrix must be square.")
-    if adj.shape[0] != len(names):
-        raise ToolError(f"Matrix dimension {adj.shape[0]} != {len(names)} node names.")
+    # --- Validate treatment/outcome ---
     if treatment not in names:
         raise ToolError(f"Treatment '{treatment}' not in node_names: {names}")
     if outcome not in names:
@@ -1394,10 +1353,11 @@ def discover(
             gs = Programming(args).forward(gs)
 
             # 5. Postprocess (bootstrap stability + KCI pruning + LLM refinement)
-            # Skip Judge for time-series data (main.py deliberately skips
-            # bootstrap+KCI+LLM refinement for lagged graphs)
+            # Skip Judge for time-series data when lagged_graph exists (main.py:268
+            # condition: time_series AND lagged_graph is not None)
             is_ts = getattr(gs.statistics, "time_series", False)
-            if is_ts:
+            has_lagged = getattr(gs.results, "lagged_graph", None) is not None
+            if is_ts and has_lagged:
                 # TS: use converted_graph as revised_graph (no refinement)
                 gs.results.revised_graph = gs.results.converted_graph
                 warnings.append(
@@ -2410,10 +2370,15 @@ def _prepare_gs_for_report(gs):
         names = gs.user_data.selected_features or gs.user_data.processed_data.columns.tolist()
         gs.user_data.meaningful_feature = not all(generic.match(str(f)) for f in names)
 
-    # knowledge_docs_for_user: Report_generation accesses [0]
+    # knowledge_docs_for_user: Report_generation accesses [0] as a string.
+    # knowledge_docs may be a list (from discover) or a string — unwrap if needed
+    # to avoid double-wrapping ([[...]]) which produces garbled LaTeX.
     if gs.user_data.knowledge_docs_for_user is None:
-        if gs.user_data.knowledge_docs:
-            gs.user_data.knowledge_docs_for_user = [gs.user_data.knowledge_docs]
+        kd = gs.user_data.knowledge_docs
+        if kd:
+            # Unwrap: if kd is a list, take first element; if string, use directly
+            text = kd[0] if isinstance(kd, list) else kd
+            gs.user_data.knowledge_docs_for_user = [str(text)]
         else:
             gs.user_data.knowledge_docs_for_user = ["No domain knowledge was provided for this analysis."]
 
@@ -2463,6 +2428,15 @@ def _prepare_gs_for_report(gs):
     # graph_conversion: ensure dict exists
     if gs.logging.graph_conversion is None:
         gs.logging.graph_conversion = {}
+
+    # bootstrap_errors / llm_errors: set by Judge.forward(), but absent when
+    # Judge is skipped (run_algorithm path or time-series data).
+    # report_generation.py:594 accesses bootstrap_errors directly;
+    # report_generation.py:604 accesses llm_errors['direct_record'/'forbid_record'].
+    if not hasattr(gs.results, "bootstrap_errors") or gs.results.bootstrap_errors is None:
+        gs.results.bootstrap_errors = []
+    if not hasattr(gs.results, "llm_errors") or gs.results.llm_errors is None:
+        gs.results.llm_errors = {"direct_record": {}, "forbid_record": {}}
 
     return gs
 
@@ -2521,9 +2495,13 @@ def generate_report(run_id: str) -> str:
                 eda.generate_eda()
             except Exception as eda_err:
                 report_warnings.append(f"EDA generation skipped: {eda_err}")
-                # Set minimal eda to avoid crashes in report
-                if not hasattr(gs.results, "eda") or gs.results.eda is None:
-                    gs.results.eda = {}
+                # Set minimal eda with required keys to prevent KeyError in
+                # report_generation.py:386 eda_prompt() accessing plot_path_dist/corr
+                if not hasattr(gs.results, "eda") or gs.results.eda is None or not gs.results.eda:
+                    gs.results.eda = {
+                        "plot_path_dist": [""],
+                        "plot_path_corr": [""],
+                    }
 
             # 2. Visualizations — graph plots, heatmaps
             try:

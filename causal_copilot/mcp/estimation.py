@@ -261,6 +261,18 @@ def estimate_drl(
         df["_W_dummy"] = 0.0
         actual_W = ["_W_dummy"]
 
+    # DRL requires discrete treatment — discretize continuous treatment into
+    # quantile bins, matching inference.py prepare_treatment_column(discretize=True).
+    # The Analysis class always sets discretize=True for all DRL variants (line 901).
+    T_series = df[treatment]
+    if treatment_kind == "continuous" or (pd.api.types.is_numeric_dtype(T_series) and T_series.nunique() > 10):
+        try:
+            df[treatment] = pd.qcut(T_series, q=3, labels=[0, 1, 2])
+            unique_vals = sorted(df[treatment].unique())
+            T0, T1 = unique_vals[0], unique_vals[-1]
+        except ValueError:
+            pass  # qcut fails on low-variance data; use raw treatment
+
     Y = df[outcome].values
     T = df[treatment].values
     X = df[X_col].values
@@ -286,6 +298,12 @@ def estimate_drl(
             cv=5,
         )
     model.fit(Y, T, X=X, W=W)
+
+    # Guard: ensure T0/T1 exist in actual treatment values after discretization.
+    # Matches inference.py:929-937 which resets T0/T1 to valid extremes.
+    treatment_values = sorted(np.unique(T))
+    if T0 not in treatment_values or T1 not in treatment_values:
+        T0, T1 = treatment_values[0], treatment_values[-1]
 
     ate = float(model.ate(X=X, T0=T0, T1=T1))
     try:

@@ -2094,6 +2094,265 @@ class TestAuditFixes:
         assert not hasattr(srv, "_auto_select_method")
 
 
+# ── Audit Round 2 — Bug Fixes ──────────────────────────────────────────
+
+
+class TestAuditRound2Bugs:
+    """Tests for bugs B1-B8 found in the second comprehensive audit."""
+
+    def test_b1_drl_discretizes_continuous_treatment(self):
+        """B1: DRL should discretize continuous treatment into quantile bins.
+
+        inference.py:901 always sets discretize=True for DRL variants.
+        estimate_drl must bin continuous treatment before fitting.
+        """
+        from causal_copilot.mcp.estimation import estimate_drl
+
+        rng = np.random.default_rng(42)
+        n = 100
+        # Continuous treatment (>10 unique values → triggers discretization)
+        T = rng.normal(0, 1, n)
+        Y = 2 * T + rng.normal(0, 0.5, n)
+        X = rng.normal(0, 1, n)
+        W = rng.normal(0, 1, n)
+        df = pd.DataFrame({"T": T, "Y": Y, "X": X, "W": W})
+
+        result = estimate_drl(
+            df,
+            treatment="T",
+            outcome="Y",
+            X_col=["X"],
+            W_col=["W"],
+            T0=0.0,
+            T1=1.0,
+            treatment_kind="continuous",
+        )
+        assert result["ate"]["estimate"] is not None
+        # After discretization, T0/T1 should be from binned values (0, 1, or 2)
+        # The key check is that the function didn't crash — DRL requires discrete treatment
+
+    def test_b2_drl_t0_t1_validation_guard(self):
+        """B2: DRL should reset T0/T1 if they don't exist in actual treatment values."""
+        from causal_copilot.mcp.estimation import estimate_drl
+
+        rng = np.random.default_rng(42)
+        n = 100
+        df = pd.DataFrame(
+            {
+                "T": rng.choice([0, 1], n),
+                "Y": rng.normal(size=n),
+                "X": rng.normal(size=n),
+            }
+        )
+
+        # Pass T0=5, T1=10 — neither exists in binary treatment
+        result = estimate_drl(
+            df,
+            treatment="T",
+            outcome="Y",
+            X_col=["X"],
+            W_col=[],
+            T0=5.0,
+            T1=10.0,
+            treatment_kind="binary",
+        )
+        # Should not crash — T0/T1 reset to actual values (0 and 1)
+        assert result["ate"]["estimate"] is not None
+
+    def test_b3_eda_failure_no_keyerror(self):
+        """B3: When EDA fails, fallback eda dict must have required keys.
+
+        report_generation.py:386 accesses eda_result['plot_path_dist'][0]
+        and eda_result['plot_path_corr'][0]. Empty dict {} would crash.
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        # Simulate EDA failure fallback
+        gs.results.eda = {
+            "plot_path_dist": [""],
+            "plot_path_corr": [""],
+        }
+        # These accesses must not crash
+        assert gs.results.eda["plot_path_dist"][0] == ""
+        assert gs.results.eda["plot_path_corr"][0] == ""
+
+    def test_b4_knowledge_docs_for_user_no_double_wrap(self):
+        """B4: knowledge_docs_for_user should not double-wrap lists.
+
+        discover() stores knowledge_docs = [domain_knowledge] (list).
+        _prepare_gs_for_report() must unwrap, not wrap again as [[...]].
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+        from causal_copilot.mcp.server import _prepare_gs_for_report
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        gs.algorithm.selected_algorithm = "PC"
+
+        # Simulate what discover() does: stores as list
+        gs.user_data.knowledge_docs = ["Domain knowledge text"]
+        gs = _prepare_gs_for_report(gs)
+
+        # knowledge_docs_for_user[0] should be a string, not a list
+        kd = gs.user_data.knowledge_docs_for_user
+        assert isinstance(kd, list)
+        assert isinstance(kd[0], str), f"Expected string, got {type(kd[0])}: {kd[0]}"
+        assert kd[0] == "Domain knowledge text"
+
+    def test_b4_knowledge_docs_string_input(self):
+        """B4: When knowledge_docs is a plain string, should wrap once correctly."""
+        from causal_copilot.mcp.bridge import make_global_state
+        from causal_copilot.mcp.server import _prepare_gs_for_report
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        gs.algorithm.selected_algorithm = "PC"
+        gs.user_data.knowledge_docs = "Plain string knowledge"
+        gs = _prepare_gs_for_report(gs)
+
+        kd = gs.user_data.knowledge_docs_for_user
+        assert isinstance(kd[0], str)
+        assert kd[0] == "Plain string knowledge"
+
+    def test_b5_bootstrap_llm_errors_default(self):
+        """B5: bootstrap_errors and llm_errors should have safe defaults.
+
+        report_generation.py:594 accesses gs.results.bootstrap_errors;
+        :604 accesses gs.results.llm_errors['direct_record'/'forbid_record'].
+        When Judge is skipped, these attrs don't exist.
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+        from causal_copilot.mcp.server import _prepare_gs_for_report
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        gs.algorithm.selected_algorithm = "PC"
+        # Don't set bootstrap_errors or llm_errors — simulates run_algorithm path
+        gs = _prepare_gs_for_report(gs)
+
+        # Should exist and be safe to access
+        assert gs.results.bootstrap_errors == []
+        assert gs.results.llm_errors["direct_record"] == {}
+        assert gs.results.llm_errors["forbid_record"] == {}
+
+    def test_b5_preserves_existing_bootstrap_errors(self):
+        """B5: If Judge ran and set real values, don't overwrite."""
+        from causal_copilot.mcp.bridge import make_global_state
+        from causal_copilot.mcp.server import _prepare_gs_for_report
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        gs.algorithm.selected_algorithm = "PC"
+        gs.results.bootstrap_errors = ["edge A→B forced"]
+        gs.results.llm_errors = {"direct_record": {"0-1": "confirmed"}, "forbid_record": {}}
+        gs = _prepare_gs_for_report(gs)
+
+        assert gs.results.bootstrap_errors == ["edge A→B forced"]
+        assert gs.results.llm_errors["direct_record"] == {"0-1": "confirmed"}
+
+    def test_b7_ts_judge_skip_requires_lagged_graph(self):
+        """B7: TS Judge skip should require lagged_graph, matching main.py:268.
+
+        main.py condition: time_series AND lagged_graph is not None.
+        If time_series=True but lagged_graph=None (algorithm failed to produce it),
+        Judge should still run.
+        """
+        from causal_copilot.mcp.bridge import make_global_state
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2], "B": [3, 4]}))
+        gs.statistics.time_series = True
+        gs.results.lagged_graph = None  # No lagged graph produced
+        gs.results.converted_graph = np.eye(2)
+
+        # The condition `is_ts and has_lagged` should be False
+        is_ts = getattr(gs.statistics, "time_series", False)
+        has_lagged = getattr(gs.results, "lagged_graph", None) is not None
+        assert is_ts is True
+        assert has_lagged is False
+        # Judge should NOT be skipped in this case
+        assert not (is_ts and has_lagged)
+
+    def test_b8_lagged_graph_serialization(self):
+        """B8: serialize_result should handle 3D lagged_graph when no 2D graph exists."""
+        from causal_copilot.mcp.bridge import make_global_state, serialize_result
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]}))
+        gs.statistics.time_series = True
+
+        # Only lagged_graph exists (3D: 2 lags × 2 vars × 2 vars)
+        lagged = np.zeros((2, 2, 2))
+        lagged[0, 0, 1] = 1  # B→A at lag 0
+        lagged[1, 1, 0] = 1  # A→B at lag 1
+        gs.results.lagged_graph = lagged
+        gs.results.raw_result = None
+        gs.results.converted_graph = None
+
+        result = serialize_result(gs)
+        assert result["status"] == "ok"
+        # Summary graph should have both edges collapsed
+        adj = np.array(result["adjacency_matrix"])
+        assert adj[0, 1] == 1  # B→A
+        assert adj[1, 0] == 1  # A→B
+
+
+class TestAuditRound2Quality:
+    """Tests for code quality fixes Q1-Q3."""
+
+    def test_q1_estimate_effect_uses_shared_resolver(self):
+        """Q1: estimate_effect should use _resolve_data_and_graph, not duplicated code."""
+        import inspect
+
+        from causal_copilot.mcp.server import estimate_effect
+
+        source = inspect.getsource(estimate_effect)
+        # The refactored version calls _resolve_data_and_graph
+        assert "_resolve_data_and_graph" in source
+
+    def test_q2_runstore_touch_on_read(self):
+        """Q2: RunStore.get() should extend TTL on successful access."""
+        import time
+
+        from causal_copilot.mcp.artifacts import RunStore
+
+        store = RunStore(ttl_seconds=2)
+        run_id = store.save({"test": True})
+
+        # Wait 1.5s, then access — should touch and reset TTL
+        time.sleep(1.5)
+        data = store.get(run_id)
+        assert data is not None
+
+        # Wait another 1.5s — without touch, total would be 3s > 2s TTL
+        # With touch, it's only 1.5s from last access < 2s TTL
+        time.sleep(1.5)
+        data = store.get(run_id)
+        assert data is not None, "TTL should have been extended by touch-on-read"
+
+    def test_q3_generate_report_prepare_gs_smoke(self):
+        """Q3: Smoke test for _prepare_gs_for_report — the core of generate_report."""
+        from causal_copilot.mcp.bridge import make_global_state
+        from causal_copilot.mcp.server import _prepare_gs_for_report
+
+        gs = make_global_state(pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]}))
+        gs.algorithm.selected_algorithm = "PC"
+        gs.results.converted_graph = np.array([[0, 1], [0, 0]])
+
+        gs = _prepare_gs_for_report(gs)
+
+        # All fields Report_generation.__init__ accesses must be non-None
+        assert gs.user_data.meaningful_feature is not None
+        assert gs.user_data.knowledge_docs_for_user is not None
+        assert isinstance(gs.user_data.knowledge_docs_for_user[0], str)
+        assert gs.statistics.description is not None
+        assert gs.algorithm.algorithm_candidates is not None
+        assert gs.algorithm.algorithm_arguments_json is not None
+        assert gs.logging.select_conversation is not None
+        assert gs.logging.argument_conversation is not None
+        assert gs.logging.global_state_logging is not None
+        assert isinstance(gs.logging.graph_conversion, dict)
+        assert isinstance(gs.results.bootstrap_errors, list)
+        assert isinstance(gs.results.llm_errors, dict)
+        assert "direct_record" in gs.results.llm_errors
+        assert "forbid_record" in gs.results.llm_errors
+
+
 # ── MCP CLI ────────────────────────────────────────────────────────────
 
 

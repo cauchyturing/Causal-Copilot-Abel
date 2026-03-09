@@ -349,6 +349,25 @@ class TestRunAlgorithmTool:
         assert prov["effective_hyperparameters"]["indep_test"] == "kci"
         assert prov["resolver_adjustments"] == {}
 
+    def test_artifact_stores_data(self):
+        from causal_copilot.mcp.artifacts import get_store
+        from causal_copilot.mcp.server import run_algorithm
+
+        rng = np.random.default_rng(0)
+        lines = ["a,b,c"]
+        for _ in range(60):
+            lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
+        csv = "\n".join(lines)
+        with _mock_run_algorithm():
+            result = json.loads(run_algorithm(csv, algorithm="PC"))
+        assert result["status"] == "ok"
+        cached = get_store().get(result["run_id"])
+        assert cached is not None
+        assert "_processed_data" in cached
+        assert "_statistics" in cached
+        import pandas as pd
+        assert isinstance(cached["_processed_data"], pd.DataFrame)
+
     def test_missing_algorithm(self):
         from causal_copilot.mcp.server import run_algorithm
 

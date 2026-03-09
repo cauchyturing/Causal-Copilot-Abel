@@ -306,8 +306,11 @@ def run_algorithm(
         }
         result = serialize_result(gs, node_names=node_names, provenance=provenance)
 
-        # Save to artifact store
-        run_id = get_store().save(result)
+        # Save to artifact store (include data for downstream estimate_effect)
+        store_payload = dict(result)
+        store_payload["_processed_data"] = gs.user_data.processed_data
+        store_payload["_statistics"] = gs.statistics
+        run_id = get_store().save(store_payload)
         result["run_id"] = run_id
         result["resources"] = {
             "algorithm_profile": f"causal://algorithms/{algorithm}",
@@ -471,8 +474,11 @@ def discover(
         if warnings:
             result["warnings"] = warnings
 
-        # Save to artifact store
-        run_id = get_store().save(result)
+        # Save to artifact store (include data for downstream estimate_effect)
+        store_payload = dict(result)
+        store_payload["_processed_data"] = gs.user_data.processed_data
+        store_payload["_statistics"] = gs.statistics
+        run_id = get_store().save(store_payload)
         result["run_id"] = run_id
 
         algo = gs.algorithm.selected_algorithm or "unknown"

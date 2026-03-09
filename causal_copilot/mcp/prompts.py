@@ -33,7 +33,6 @@ Causal discovery finds cause-effect relationships from observational data — no
 3. Ignoring sample size (KCI is O(n^3))
 4. Not checking for time-series structure
 """,
-
     "analyze-dataset": """Causal discovery workflow — knowledge-first, then discover.
 
 ## Recommended Path (best results)
@@ -67,7 +66,6 @@ Causal discovery finds cause-effect relationships from observational data — no
 - Do NOT present CPDAG/PAG edges as definitive causal directions.
 - Do NOT claim effects are identifiable without checking inference_policy.
 """,
-
     "causal-analysis": """You are performing a complete causal analysis. Follow this knowledge-first workflow.
 
 ## Step 1: DIAGNOSE

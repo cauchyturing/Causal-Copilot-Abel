@@ -61,12 +61,14 @@ def _run_in_subprocess(
 
     Returns (adj_matrix, metadata) or raises TimeoutError / RuntimeError.
     """
-    cfg = json.dumps({
-        "algo_name": algo.name,
-        "algo_params": algo.get_params(),
-        "data_json": data.to_json(),
-        "seed": seed,
-    })
+    cfg = json.dumps(
+        {
+            "algo_name": algo.name,
+            "algo_params": algo.get_params(),
+            "data_json": data.to_json(),
+            "seed": seed,
+        }
+    )
 
     proc = subprocess.Popen(
         [sys.executable, "-c", _WORKER_SCRIPT],
@@ -79,7 +81,7 @@ def _run_in_subprocess(
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
-        raise TimeoutError(f"Algorithm timed out after {timeout}s")
+        raise TimeoutError(f"Algorithm timed out after {timeout}s") from None
 
     if proc.returncode != 0:
         raise RuntimeError(f"Subprocess exited with code {proc.returncode}: {stderr.decode()[:500]}")

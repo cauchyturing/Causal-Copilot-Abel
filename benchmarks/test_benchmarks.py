@@ -113,7 +113,7 @@ class TestEvaluation:
         This was the P0 bug — binarizing with (pred > 0) collapsed edge types,
         making CPDAG outputs appear perfect against DAG ground truth.
         """
-        gt = np.array([[0, 1], [0, 0]])   # X→Y (directed)
+        gt = np.array([[0, 1], [0, 0]])  # X→Y (directed)
         pred = np.array([[0, 2], [0, 0]])  # X—Y (undirected)
         m = evaluate_adjacency(pred, gt)
         assert m.precision < 1.0, "Undirected pred should NOT be perfect against directed GT"
@@ -137,7 +137,7 @@ class TestExpandedMetrics:
     def test_skeleton_metrics(self):
         """Skeleton ignores direction — only checks adjacency."""
         pred = np.array([[0, 0], [1, 0]])  # Y->X
-        gt = np.array([[0, 1], [0, 0]])    # X->Y
+        gt = np.array([[0, 1], [0, 0]])  # X->Y
         m = evaluate_adjacency(pred, gt)
         assert m.skeleton_precision == 1.0
         assert m.skeleton_recall == 1.0
@@ -146,7 +146,7 @@ class TestExpandedMetrics:
     def test_orientation_accuracy_detects_undirected(self):
         """Undirected prediction vs directed GT should have orientation_accuracy < 1."""
         pred = np.array([[0, 2], [0, 0]])  # X—Y (undirected)
-        gt = np.array([[0, 1], [0, 0]])    # X→Y (directed)
+        gt = np.array([[0, 1], [0, 0]])  # X→Y (directed)
         m = evaluate_adjacency(pred, gt)
         assert m.skeleton_precision == 1.0  # skeleton is correct
         assert m.orientation_accuracy == 0.0  # but orientation is wrong
@@ -180,7 +180,7 @@ class TestExpandedMetrics:
 # Standard benchmark datasets
 # ---------------------------------------------------------------------------
 
-from benchmarks.datasets import BENCHMARK_DATASETS, BenchmarkDataset
+from benchmarks.datasets import BENCHMARK_DATASETS, BenchmarkDataset  # noqa: E402
 
 
 class TestBenchmarkDatasets:
@@ -238,12 +238,13 @@ class TestBenchmarkDatasets:
 # Algorithm capability matrix
 # ---------------------------------------------------------------------------
 
-from benchmarks.capability import CAPABILITY_MATRIX, AlgorithmCapability
+from benchmarks.capability import CAPABILITY_MATRIX, AlgorithmCapability  # noqa: E402
 
 
 class TestCapabilityMatrix:
     def test_has_all_registered_algorithms(self):
         from causal_copilot.algorithms.registry import REGISTRY
+
         for name in REGISTRY:
             assert name in CAPABILITY_MATRIX, f"Missing capability entry for {name}"
 
@@ -264,7 +265,7 @@ class TestCapabilityMatrix:
 # Benchmark runner
 # ---------------------------------------------------------------------------
 
-from benchmarks.runner import run_benchmark, BenchmarkResult
+from benchmarks.runner import BenchmarkResult, run_benchmark  # noqa: E402
 
 
 @pytest.mark.slow

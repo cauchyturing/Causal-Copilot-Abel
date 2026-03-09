@@ -65,13 +65,14 @@ def cmd_doctor(args):
     if getattr(args, "llm", False):
         print("\nLLM Connectivity:")
         try:
-            from causal_copilot.agent.llm import AgentLLM
             import os
+
+            from causal_copilot.agent.llm import AgentLLM
 
             provider = os.getenv("LLM_PROVIDER", "openai")
             llm = AgentLLM(provider=provider)
             llm._client = llm._client.with_options(timeout=10.0, max_retries=0)
-            response = llm.complete("Say 'ok' and nothing else.")
+            llm.complete("Say 'ok' and nothing else.")
             print(f"  + {provider} ({llm.model}): connected")
         except Exception as e:
             print(f"  x connection failed: {e}")
@@ -169,10 +170,12 @@ def cmd_benchmark(args):
     for r in results:
         if r.get("status") != "ok":
             status = r.get("status", "?").upper()
-            print(f"{r['algorithm']:<20} {r.get('output_type','?'):<6} {r['scenario']:<15} {status:>5}")
+            print(f"{r['algorithm']:<20} {r.get('output_type', '?'):<6} {r['scenario']:<15} {status:>5}")
         else:
             m = r["metrics"]
-            print(f"{r['algorithm']:<20} {r['output_type']:<6} {r['scenario']:<15} {m['shd']:>5} {m['skeleton_f1']:>8.3f} {m['f1']:>6.3f} {m['orientation_accuracy']:>7.3f}")
+            print(
+                f"{r['algorithm']:<20} {r['output_type']:<6} {r['scenario']:<15} {m['shd']:>5} {m['skeleton_f1']:>8.3f} {m['f1']:>6.3f} {m['orientation_accuracy']:>7.3f}"
+            )
 
 
 def cmd_agent_analyze(args):

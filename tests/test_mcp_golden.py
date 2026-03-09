@@ -3,13 +3,13 @@
 If these fail, it means a tool's output contract changed.
 Update the golden snapshot ONLY after verifying the change is intentional.
 """
+
 import json
 import sys
 from types import ModuleType
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 
 def _mock_stat_info(gs):
@@ -45,60 +45,107 @@ class TestOutputSchemaStability:
         _ensure_stat_module()
         from causal_copilot.mcp.server import diagnose_data
 
-        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
+        csv = "x,y\n" + "\n".join(f"{i},{i * 2}" for i in range(50))
         result = json.loads(diagnose_data(csv))
         if result["status"] == "ok":
             _check_keys(result, ["status", "diagnosis"])
-            _check_keys(result["diagnosis"], [
-                "linearity", "data_type", "sample_size", "feature_number",
-            ])
+            _check_keys(
+                result["diagnosis"],
+                [
+                    "linearity",
+                    "data_type",
+                    "sample_size",
+                    "feature_number",
+                ],
+            )
 
     def test_inspect_graph_ok_schema(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["X","Y"]',
-        ))
-        _check_keys(result, [
-            "status", "graph_kind", "graph_stats", "identifiability",
-            "inference_policy", "summary", "key_findings", "limitations",
-        ])
-        _check_keys(result["graph_stats"], [
-            "n_nodes", "n_edges", "n_directed", "n_undirected",
-            "n_bidirected", "density",
-        ])
-        _check_keys(result["inference_policy"], [
-            "eligibility", "method", "reason", "assumptions_used",
-        ])
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["X","Y"]',
+            )
+        )
+        _check_keys(
+            result,
+            [
+                "status",
+                "graph_kind",
+                "graph_stats",
+                "identifiability",
+                "inference_policy",
+                "summary",
+                "key_findings",
+                "limitations",
+            ],
+        )
+        _check_keys(
+            result["graph_stats"],
+            [
+                "n_nodes",
+                "n_edges",
+                "n_directed",
+                "n_undirected",
+                "n_bidirected",
+                "density",
+            ],
+        )
+        _check_keys(
+            result["inference_policy"],
+            [
+                "eligibility",
+                "method",
+                "reason",
+                "assumptions_used",
+            ],
+        )
 
     def test_inspect_graph_needs_more_input_schema(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,2],[2,0]]",
-            node_names='["A","B"]',
-        ))
-        _check_keys(result, [
-            "status", "graph_kind", "graph_stats",
-            "missing_inputs", "next_step",
-        ])
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,2],[2,0]]",
+                node_names='["A","B"]',
+            )
+        )
+        _check_keys(
+            result,
+            [
+                "status",
+                "graph_kind",
+                "graph_stats",
+                "missing_inputs",
+                "next_step",
+            ],
+        )
         assert result["status"] == "needs_more_input"
 
     def test_inspect_graph_query_assessment_schema(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-            treatment="A",
-            outcome="B",
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+                treatment="A",
+                outcome="B",
+            )
+        )
         assert "query_assessment" in result
-        _check_keys(result["query_assessment"], [
-            "treatment", "outcome", "directly_connected",
-            "directed_path_exists", "effect_identifiable", "method",
-        ])
+        _check_keys(
+            result["query_assessment"],
+            [
+                "treatment",
+                "outcome",
+                "directly_connected",
+                "directed_path_exists",
+                "effect_identifiable",
+                "method",
+            ],
+        )
 
     def test_run_algorithm_schema(self):
         _ensure_stat_module()
@@ -113,21 +160,33 @@ class TestOutputSchemaStability:
                 return np.zeros((n, n)), {}, None
 
         rng = np.random.default_rng(0)
-        csv = "a,b\n" + "\n".join(
-            f"{rng.normal()},{rng.normal()}" for _ in range(60)
-        )
+        csv = "a,b\n" + "\n".join(f"{rng.normal()},{rng.normal()}" for _ in range(60))
         with patch("causal_discovery.wrappers.PC", _MockWrapper):
             result = json.loads(run_algorithm(csv, algorithm="PC"))
         if result["status"] == "ok":
-            _check_keys(result, [
-                "status", "adjacency_matrix", "edges", "graph_kind",
-                "identifiability", "run_id", "provenance",
-            ])
-            _check_keys(result["provenance"], [
-                "algorithm", "requested_hyperparameters",
-                "effective_hyperparameters", "resolver_adjustments",
-                "seed", "planner",
-            ])
+            _check_keys(
+                result,
+                [
+                    "status",
+                    "adjacency_matrix",
+                    "edges",
+                    "graph_kind",
+                    "identifiability",
+                    "run_id",
+                    "provenance",
+                ],
+            )
+            _check_keys(
+                result["provenance"],
+                [
+                    "algorithm",
+                    "requested_hyperparameters",
+                    "effective_hyperparameters",
+                    "resolver_adjustments",
+                    "seed",
+                    "planner",
+                ],
+            )
 
 
 class TestResourceSchemaStability:

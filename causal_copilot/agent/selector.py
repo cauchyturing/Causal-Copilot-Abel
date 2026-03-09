@@ -36,11 +36,7 @@ def _build_algorithm_catalog() -> dict[str, dict]:
         if profile_path.exists():
             catalog[name] = {
                 "profile": profile_path.read_text(encoding="utf-8"),
-                "hyperparameters": (
-                    json.loads(hp_path.read_text(encoding="utf-8"))
-                    if hp_path.exists()
-                    else {}
-                ),
+                "hyperparameters": (json.loads(hp_path.read_text(encoding="utf-8")) if hp_path.exists() else {}),
             }
     return catalog
 
@@ -80,14 +76,14 @@ def select_algorithm(
     prompt = f"""You are selecting a causal discovery algorithm.
 
 ## Data Properties
-- Samples: {data_properties['n_samples']}
-- Features: {data_properties['n_features']}
-- Likely linear: {data_properties['likely_linear']}
-- Likely Gaussian: {data_properties['likely_gaussian']}
-- Time series: {data_properties['is_time_series']}
+- Samples: {data_properties["n_samples"]}
+- Features: {data_properties["n_features"]}
+- Likely linear: {data_properties["likely_linear"]}
+- Likely Gaussian: {data_properties["likely_gaussian"]}
+- Time series: {data_properties["is_time_series"]}
 
 ## User Query
-{query or 'Discover causal relationships in this dataset.'}
+{query or "Discover causal relationships in this dataset."}
 
 ## Available Algorithms
 {algo_summaries}
@@ -154,10 +150,10 @@ def tune_hyperparameters(
     prompt = f"""You are tuning hyperparameters for the {algorithm} causal discovery algorithm.
 
 ## Data Properties
-- Samples: {data_properties['n_samples']}
-- Features: {data_properties['n_features']}
-- Likely linear: {data_properties['likely_linear']}
-- Likely Gaussian: {data_properties['likely_gaussian']}
+- Samples: {data_properties["n_samples"]}
+- Features: {data_properties["n_features"]}
+- Likely linear: {data_properties["likely_linear"]}
+- Likely Gaussian: {data_properties["likely_gaussian"]}
 
 ## Available Hyperparameters
 {hp_description}

@@ -54,9 +54,7 @@ class AgentLLM:
         base_url: str | None = None,
     ):
         if provider not in PROVIDERS:
-            raise ValueError(
-                f"Unknown provider: {provider!r}. Available: {sorted(PROVIDERS)}"
-            )
+            raise ValueError(f"Unknown provider: {provider!r}. Available: {sorted(PROVIDERS)}")
         preset = PROVIDERS[provider]
         self.provider = provider
         self.model = model or os.getenv("LLM_MODEL") or preset["default_model"]
@@ -69,12 +67,8 @@ class AgentLLM:
         try:
             from openai import OpenAI
         except ImportError:
-            raise ImportError(
-                "Agent mode requires openai. Install with: pip install causal-copilot[agent]"
-            )
-        self._client = OpenAI(
-            api_key=resolved_key, base_url=self._base_url, timeout=60.0, max_retries=1
-        )
+            raise ImportError("Agent mode requires openai. Install with: pip install causal-copilot[agent]") from None
+        self._client = OpenAI(api_key=resolved_key, base_url=self._base_url, timeout=60.0, max_retries=1)
 
     def complete(
         self,

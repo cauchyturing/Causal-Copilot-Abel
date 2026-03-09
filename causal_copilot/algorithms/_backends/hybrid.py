@@ -42,9 +42,7 @@ class HybridBackend(Backend):
             return adj_matrix, info, cg_stage1
 
         # Stage 2: orient undirected edges using functional tests
-        self._orient_undirected_edges(
-            cg_stage1, data_values, second_stage, alpha, m_max, n
-        )
+        self._orient_undirected_edges(cg_stage1, data_values, second_stage, alpha, m_max, n)
 
         adj_matrix = convert_causallearn_cpdag(cg_stage1.G.graph)
         info = {"initial_cpdag": None, "adj_matrix_final": adj_matrix}
@@ -113,9 +111,7 @@ class HybridBackend(Backend):
                         data_i = data_values[:, i].reshape(-1, 1)
                         data_j = data_values[:, j].reshape(-1, 1)
                         conf_data = data_values[:, full_conf] if full_conf else None
-                        pval_for, pval_back = model.cause_or_effect(
-                            data_i, data_j, conf_data
-                        )
+                        pval_for, pval_back = model.cause_or_effect(data_i, data_j, conf_data)
 
                         if pval_for > alpha and pval_for > pval_back:
                             _orient_edge(cg, i, j)  # i -> j
@@ -139,14 +135,14 @@ def _get_confounders(cg, i, j):
     for nn in neigh_i:
         if nn == j:
             continue
-        if cg.G.is_directed_from_to(
-            cg.G.nodes[nn], cg.G.nodes[i]
-        ) and cg.G.is_directed_from_to(cg.G.nodes[nn], cg.G.nodes[j]):
+        if cg.G.is_directed_from_to(cg.G.nodes[nn], cg.G.nodes[i]) and cg.G.is_directed_from_to(
+            cg.G.nodes[nn], cg.G.nodes[j]
+        ):
             pi.append(nn)
         else:
-            is_collider = cg.G.is_directed_from_to(
-                cg.G.nodes[i], cg.G.nodes[nn]
-            ) and cg.G.is_directed_from_to(cg.G.nodes[j], cg.G.nodes[nn])
+            is_collider = cg.G.is_directed_from_to(cg.G.nodes[i], cg.G.nodes[nn]) and cg.G.is_directed_from_to(
+                cg.G.nodes[j], cg.G.nodes[nn]
+            )
             if not is_collider:
                 qi.append(nn)
     return pi, qi

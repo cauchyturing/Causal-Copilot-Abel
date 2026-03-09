@@ -134,7 +134,7 @@ class AgentCopilot:
         prompt = f"""A causal discovery algorithm found these relationships:
 {edge_text}
 
-User question: {query or 'What are the causal relationships?'}
+User question: {query or "What are the causal relationships?"}
 
 Provide a brief (2-3 sentence) scientific interpretation."""
 

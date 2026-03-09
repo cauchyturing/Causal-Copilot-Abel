@@ -1,8 +1,10 @@
 """Tests for process-based algorithm timeout."""
+
+from unittest.mock import patch
+
 import numpy as np
 import pandas as pd
 import pytest
-from unittest.mock import patch
 
 from causal_copilot.copilot import CausalCopilot
 

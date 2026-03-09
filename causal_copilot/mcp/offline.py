@@ -3,6 +3,7 @@
 Used as fallback when LLM-based selection (Filter → Reranker) is unavailable
 or fails.  Pure heuristic — no API calls.
 """
+
 from __future__ import annotations
 
 
@@ -67,15 +68,13 @@ def get_default_estimation_config(method: str, data, treatment: str) -> dict:
         return {
             "algo": "LinearDML",
             "model_y": LinearRegression(),
-            "model_t": (LogisticRegressionCV(max_iter=1000)
-                        if binary else LinearRegression()),
+            "model_t": (LogisticRegressionCV(max_iter=1000) if binary else LinearRegression()),
         }
     elif method == "drl":
         return {
             "algo": "LinearDRL",
             "model_regression": LinearRegression(),
-            "model_propensity": (LogisticRegressionCV(max_iter=1000)
-                                 if binary else LinearRegression()),
+            "model_propensity": (LogisticRegressionCV(max_iter=1000) if binary else LinearRegression()),
         }
     elif method == "metalearner":
         return {

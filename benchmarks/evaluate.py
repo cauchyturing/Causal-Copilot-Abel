@@ -90,9 +90,7 @@ def evaluate_adjacency(predicted: np.ndarray, ground_truth: np.ndarray) -> Disco
     skel_precision = skel_tp / (skel_tp + skel_fp) if (skel_tp + skel_fp) > 0 else 0.0
     skel_recall = skel_tp / (skel_tp + skel_fn) if (skel_tp + skel_fn) > 0 else 0.0
     skel_f1 = (
-        2 * skel_precision * skel_recall / (skel_precision + skel_recall)
-        if (skel_precision + skel_recall) > 0
-        else 0.0
+        2 * skel_precision * skel_recall / (skel_precision + skel_recall) if (skel_precision + skel_recall) > 0 else 0.0
     )
 
     # --- Orientation accuracy + SHD ---
@@ -106,7 +104,7 @@ def evaluate_adjacency(predicted: np.ndarray, ground_truth: np.ndarray) -> Disco
     total_shared = 0
     if np.sum(shared_skeleton) > 0:
         rows, cols = np.where(shared_skeleton)
-        for r, c in zip(rows, cols):
+        for r, c in zip(rows, cols, strict=True):
             total_shared += 1
             if predicted[r, c] == ground_truth[r, c] and predicted[c, r] == ground_truth[c, r]:
                 correct_orientation += 1

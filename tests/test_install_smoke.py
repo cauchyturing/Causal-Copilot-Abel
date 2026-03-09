@@ -50,14 +50,10 @@ class TestCoreAgentBoundary:
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     for alias in node.names:
-                        assert not alias.name.startswith("agent"), (
-                            f"{py_file.name} imports from agent: {alias.name}"
-                        )
+                        assert not alias.name.startswith("agent"), f"{py_file.name} imports from agent: {alias.name}"
                 elif isinstance(node, ast.ImportFrom):
                     if node.module and node.module.startswith("agent"):
-                        raise AssertionError(
-                            f"{py_file.name} imports from agent: {node.module}"
-                        )
+                        raise AssertionError(f"{py_file.name} imports from agent: {node.module}")
 
 
 class TestAnalyzeWithoutRepoRoot:

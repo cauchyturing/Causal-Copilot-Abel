@@ -28,7 +28,6 @@ class XGESBackend(Backend):
         # adj[i,j]=1 and adj[j,i]=1 => i -- j   (undirected)
         adj_pdag = result.to_adjacency_matrix()
 
-        n = adj_pdag.shape[0]
         adj_matrix = np.zeros_like(adj_pdag, dtype=int)
         indices = np.where(adj_pdag == 1)
         for i, j in zip(indices[0], indices[1], strict=False):

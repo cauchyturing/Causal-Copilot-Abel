@@ -84,8 +84,17 @@ def _generate_from_dag(
 def _build_sachs() -> BenchmarkDataset:
     """Sachs et al. 2005 — 11 proteins, 17 edges."""
     columns = [
-        "Raf", "Mek", "PLCg", "PIP2", "PIP3",
-        "Erk", "Akt", "PKA", "PKC", "JNK", "P38",
+        "Raf",
+        "Mek",
+        "PLCg",
+        "PIP2",
+        "PIP3",
+        "Erk",
+        "Akt",
+        "PKA",
+        "PKC",
+        "JNK",
+        "P38",
     ]
     col_idx = {c: i for i, c in enumerate(columns)}
     n = len(columns)
@@ -96,13 +105,23 @@ def _build_sachs() -> BenchmarkDataset:
     # Fig. 3A.  Note: the bnlearn repository version differs (has Akt→Erk
     # instead of PIP3→Akt and PKA→Akt).  We follow the original paper.
     edges = [
-        ("PLCg", "PIP2"), ("PLCg", "PIP3"), ("PIP3", "PIP2"),
+        ("PLCg", "PIP2"),
+        ("PLCg", "PIP3"),
+        ("PIP3", "PIP2"),
         ("PIP3", "Akt"),
-        ("PKC", "PKA"), ("PKC", "Raf"), ("PKC", "Mek"),
-        ("PKC", "JNK"), ("PKC", "P38"),
-        ("PKA", "Raf"), ("PKA", "Mek"), ("PKA", "Erk"),
-        ("PKA", "Akt"), ("PKA", "JNK"), ("PKA", "P38"),
-        ("Raf", "Mek"), ("Mek", "Erk"),
+        ("PKC", "PKA"),
+        ("PKC", "Raf"),
+        ("PKC", "Mek"),
+        ("PKC", "JNK"),
+        ("PKC", "P38"),
+        ("PKA", "Raf"),
+        ("PKA", "Mek"),
+        ("PKA", "Erk"),
+        ("PKA", "Akt"),
+        ("PKA", "JNK"),
+        ("PKA", "P38"),
+        ("Raf", "Mek"),
+        ("Mek", "Erk"),
     ]
     for src, tgt in edges:
         adj[col_idx[tgt], col_idx[src]] = 1
@@ -121,8 +140,14 @@ def _build_sachs() -> BenchmarkDataset:
 def _build_asia() -> BenchmarkDataset:
     """Lauritzen & Spiegelhalter 1988 — 8 nodes, 8 edges."""
     columns = [
-        "Asia", "Tuberculosis", "Smoking", "LungCancer",
-        "TBorCancer", "Bronchitis", "XRay", "Dyspnea",
+        "Asia",
+        "Tuberculosis",
+        "Smoking",
+        "LungCancer",
+        "TBorCancer",
+        "Bronchitis",
+        "XRay",
+        "Dyspnea",
     ]
     col_idx = {c: i for i, c in enumerate(columns)}
     n = len(columns)

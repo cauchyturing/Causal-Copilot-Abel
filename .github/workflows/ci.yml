@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/*"]
+    branches: [main, abel-release, "feat/*"]
   pull_request:
     branches: [main]
 

@@ -21,7 +21,7 @@ class TestWheelSmoke:
 
     def test_import_agent(self):
         try:
-            from causal_copilot.agent import AgentCopilot, _CONTEXT_DIR
+            from causal_copilot.agent import _CONTEXT_DIR, AgentCopilot
 
             assert callable(AgentCopilot)
             assert _CONTEXT_DIR.is_dir()
@@ -38,9 +38,7 @@ class TestWheelSmoke:
 
         for name in REGISTRY:
             assert (_CONTEXT_DIR / "algos" / f"{name}.txt").exists(), f"Missing profile: {name}.txt"
-            assert (
-                _CONTEXT_DIR / "hyperparameters" / f"{name}.json"
-            ).exists(), f"Missing HP spec: {name}.json"
+            assert (_CONTEXT_DIR / "hyperparameters" / f"{name}.json").exists(), f"Missing HP spec: {name}.json"
 
     def test_cli_version(self):
         result = subprocess.run(

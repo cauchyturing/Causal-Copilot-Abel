@@ -18,6 +18,6 @@ from pathlib import Path
 
 _CONTEXT_DIR = Path(__file__).parent / "context"
 
-from causal_copilot.agent.pipeline import AgentCopilot
+from causal_copilot.agent.pipeline import AgentCopilot  # noqa: E402
 
 __all__ = ["AgentCopilot", "_CONTEXT_DIR"]

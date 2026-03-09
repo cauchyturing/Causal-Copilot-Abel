@@ -1,8 +1,6 @@
 """MCP resources: algorithm profiles, HP specs, and guide documents."""
-from __future__ import annotations
 
-import json
-from pathlib import Path
+from __future__ import annotations
 
 from causal_copilot.mcp.bridge import PIPELINE_ROOT
 
@@ -15,11 +13,13 @@ def get_algorithm_resources():
     resources = []
     if _ALGO_DIR.exists():
         for f in sorted(_ALGO_DIR.glob("*.txt")):
-            resources.append({
-                "name": f.stem,
-                "uri": f"causal://algorithms/{f.stem}",
-                "description": f"Profile for {f.stem} causal discovery algorithm",
-            })
+            resources.append(
+                {
+                    "name": f.stem,
+                    "uri": f"causal://algorithms/{f.stem}",
+                    "description": f"Profile for {f.stem} causal discovery algorithm",
+                }
+            )
     return resources
 
 
@@ -39,11 +39,13 @@ def get_hp_resources():
     resources = []
     if _HP_DIR.exists():
         for f in sorted(_HP_DIR.glob("*.json")):
-            resources.append({
-                "name": f.stem,
-                "uri": f"causal://hyperparameters/{f.stem}",
-                "description": f"Hyperparameter specification for {f.stem}",
-            })
+            resources.append(
+                {
+                    "name": f.stem,
+                    "uri": f"causal://hyperparameters/{f.stem}",
+                    "description": f"Hyperparameter specification for {f.stem}",
+                }
+            )
     return resources
 
 

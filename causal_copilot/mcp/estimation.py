@@ -4,6 +4,7 @@ Each function has lazy imports and returns a normalized dict.
 We bypass the heavy Analysis class (which imports shap, matplotlib, etc.)
 and call the underlying libraries directly.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -52,7 +53,8 @@ def estimate_linear(
         target_units="ate",
     )
     significance = estimate.estimator.test_significance(
-        data, estimate.value,
+        data,
+        estimate.value,
     )
     p_value = significance["p_value"]
     if isinstance(p_value, (list, np.ndarray)):
@@ -141,8 +143,8 @@ def estimate_dml(
 
     config = get_default_estimation_config("dml", data, treatment)
 
-    from causal_inference.DML.hte_program import HTE_Programming
     from causal_copilot.mcp.bridge import make_args, make_global_state
+    from causal_inference.DML.hte_program import HTE_Programming
 
     gs = make_global_state(data)
     gs.user_data.processed_data = data.copy()
@@ -162,8 +164,13 @@ def estimate_dml(
         gs.user_data.processed_data = df
 
     programmer = HTE_Programming(
-        args, y_col=outcome, T_col=treatment,
-        T0=T0, T1=T1, X_col=X_col, W_col=actual_W,
+        args,
+        y_col=outcome,
+        T_col=treatment,
+        T0=T0,
+        T1=T1,
+        X_col=X_col,
+        W_col=actual_W,
     )
     programmer.fit_model(gs)
 
@@ -202,6 +209,7 @@ def estimate_drl(
     to avoid DataFrame/numpy incompatibilities in upstream wrappers.
     """
     from econml.dr import LinearDRLearner
+
     from causal_copilot.mcp.offline import get_default_estimation_config
 
     config = get_default_estimation_config("drl", data, treatment)
@@ -275,8 +283,8 @@ def estimate_metalearner(
     learner: "s" (SLearner), "t" (TLearner), "x" (XLearner).
     Returns dict with 'ate' and 'att' keys.
     """
-    from econml.metalearners import SLearner, TLearner, XLearner
     from econml.inference import BootstrapInference
+    from econml.metalearners import SLearner, TLearner, XLearner
     from sklearn.linear_model import LinearRegression, LogisticRegression
 
     df = data.copy()
@@ -296,6 +304,7 @@ def estimate_metalearner(
         model = TLearner(models=LinearRegression())
     elif learner == "x":
         from sklearn.ensemble import GradientBoostingRegressor
+
         model = XLearner(
             models=GradientBoostingRegressor(n_estimators=100),
             propensity_model=LogisticRegression(max_iter=1000),
@@ -434,7 +443,10 @@ def run_refutation(
     from dowhy import CausalModel
 
     model = CausalModel(
-        data=data, treatment=treatment, outcome=outcome, graph=dot_graph,
+        data=data,
+        treatment=treatment,
+        outcome=outcome,
+        graph=dot_graph,
     )
     estimand = model.identify_effect(proceed_when_unidentifiable=True)
     estimate = model.estimate_effect(
@@ -453,7 +465,8 @@ def run_refutation(
     # Data subset refuter
     try:
         refute = model.refute_estimate(
-            estimand, estimate,
+            estimand,
+            estimate,
             method_name="data_subset_refuter",
             subset_fraction=0.8,
         )
@@ -467,7 +480,8 @@ def run_refutation(
     # Random common cause
     try:
         refute = model.refute_estimate(
-            estimand, estimate,
+            estimand,
+            estimate,
             method_name="random_common_cause",
         )
         results["refutations"]["random_common_cause"] = {
@@ -480,7 +494,8 @@ def run_refutation(
     # Placebo treatment
     try:
         refute = model.refute_estimate(
-            estimand, estimate,
+            estimand,
+            estimate,
             method_name="placebo_treatment_refuter",
             placebo_type="permute",
         )
@@ -579,9 +594,7 @@ def run_counterfactual(
             treatment: _safe_float(cf_samples[treatment].iloc[0]),
             outcome: _safe_float(cf_samples[outcome].iloc[0]),
         },
-        "effect": _safe_float(
-            cf_samples[outcome].iloc[0] - observed[outcome].iloc[0]
-        ),
+        "effect": _safe_float(cf_samples[outcome].iloc[0] - observed[outcome].iloc[0]),
         "observed_row_index": observed_row_idx,
     }
 
@@ -626,9 +639,7 @@ def run_anomaly_attribution(
         }
 
     # Sort by mean score descending
-    results = dict(
-        sorted(results.items(), key=lambda x: abs(x[1]["mean_score"] or 0), reverse=True)
-    )
+    results = dict(sorted(results.items(), key=lambda x: abs(x[1]["mean_score"] or 0), reverse=True))
 
     return {
         "target_node": target_node,
@@ -664,9 +675,7 @@ def run_distribution_change(
     for node, score in attribution.items():
         results[node] = _safe_float(score)
 
-    results = dict(
-        sorted(results.items(), key=lambda x: abs(x[1] or 0), reverse=True)
-    )
+    results = dict(sorted(results.items(), key=lambda x: abs(x[1] or 0), reverse=True))
 
     return {
         "target_node": target_node,
@@ -687,8 +696,8 @@ def compute_feature_importance(
     Returns dict mapping feature names to mean absolute SHAP values.
     """
     import shap
-    from sklearn.linear_model import LinearRegression
     from sklearn.ensemble import RandomForestRegressor
+    from sklearn.linear_model import LinearRegression
 
     X = data.drop(columns=[target_node])
     y = data[[target_node]]
@@ -711,9 +720,7 @@ def compute_feature_importance(
     return {
         "target_node": target_node,
         "method": "linear_shap" if is_linear else "tree_shap",
-        "feature_importance": {
-            col: _safe_float(val) for col, val in mean_shap.items()
-        },
+        "feature_importance": {col: _safe_float(val) for col, val in mean_shap.items()},
         "top_features": list(mean_shap.head(10).index),
     }
 
@@ -750,7 +757,8 @@ def run_graph_falsification(
     df = data[[c for c in names if c in data.columns]].copy()
 
     result = falsify_graph(
-        G, df,
+        G,
+        df,
         n_permutations=n_permutations,
         plot_histogram=False,
         suggestions=True,
@@ -758,15 +766,14 @@ def run_graph_falsification(
 
     # Parse result string for structured output
     import re
+
     result_str = str(result)
 
     # Extract key metrics from the result string
-    violations = []
-    suggestions_list = []
 
     # Look for p-value and violation info
     p_value = None
-    p_match = re.search(r'p_value\s*=?\s*([\d.]+)', result_str)
+    p_match = re.search(r"p_value\s*=?\s*([\d.]+)", result_str)
     if p_match:
         p_value = float(p_match.group(1))
 
@@ -826,7 +833,5 @@ def run_intervention_simulation(
             "median": _safe_float(samples[outcome].median()),
             "n": n_samples,
         },
-        "mean_change": _safe_float(
-            samples[outcome].mean() - data[outcome].mean()
-        ),
+        "mean_change": _safe_float(samples[outcome].mean() - data[outcome].mean()),
     }

@@ -12,8 +12,8 @@ from causal_copilot.algorithms.adapters import (
     FCIAdapter,
     GESAdapter,
     GOLEMAdapter,
-    GRaSPAdapter,
     GrangerCausalityAdapter,
+    GRaSPAdapter,
     HybridAdapter,
     ICALiNGAMAdapter,
     NOTEARSLinearAdapter,
@@ -81,10 +81,25 @@ class TestRegistry:
 
     def test_registry_names(self):
         expected = {
-            "PC", "GES", "NOTEARSLinear", "DirectLiNGAM", "PCMCI", "ICALiNGAM", "GrangerCausality",
-            "FCI", "GRaSP", "CDNOD", "VARLiNGAM", "CALM",
-            "GOLEM", "NOTEARSNonlinear", "CORL", "PCParallel",
-            "XGES", "DYNOTEARS", "Hybrid",
+            "PC",
+            "GES",
+            "NOTEARSLinear",
+            "DirectLiNGAM",
+            "PCMCI",
+            "ICALiNGAM",
+            "GrangerCausality",
+            "FCI",
+            "GRaSP",
+            "CDNOD",
+            "VARLiNGAM",
+            "CALM",
+            "GOLEM",
+            "NOTEARSNonlinear",
+            "CORL",
+            "PCParallel",
+            "XGES",
+            "DYNOTEARS",
+            "Hybrid",
         }
         assert set(STABLE_ALGORITHMS.keys()) == expected
 

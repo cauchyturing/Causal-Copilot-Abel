@@ -29,8 +29,8 @@ from causal_copilot.mcp.bridge import (
     serialize_result,
 )
 from causal_discovery.pdag_policy import (
-    classify_graph_kind,
     check_inference_policy,
+    classify_graph_kind,
     get_identifiable_edges,
 )
 
@@ -144,13 +144,12 @@ def _build_knowledge_prompt(diagnosis: dict) -> str:
 
     # Determine if variable names look meaningful (not just X1, X2, V1, V2)
     import re
-    generic_pattern = re.compile(r'^[VXvx]\d+$')
+
+    generic_pattern = re.compile(r"^[VXvx]\d+$")
     meaningful_names = not all(generic_pattern.match(str(f)) for f in features)
 
     sections = []
-    sections.append(
-        f"The dataset has {n_features} variables and {sample_size} observations."
-    )
+    sections.append(f"The dataset has {n_features} variables and {sample_size} observations.")
 
     if meaningful_names:
         var_list = ", ".join(str(f) for f in features[:30])
@@ -329,8 +328,12 @@ def _build_interpretation(treatment, outcome, method, estimates, confounders) ->
 
 
 def _resolve_data_and_graph(
-    run_id: str, csv_data: str, adjacency_matrix: str,
-    node_names: str, data_diagnosis: str = "", require_data: bool = True,
+    run_id: str,
+    csv_data: str,
+    adjacency_matrix: str,
+    node_names: str,
+    data_diagnosis: str = "",
+    require_data: bool = True,
 ):
     """Resolve inputs from either run_id or explicit args.
 
@@ -354,10 +357,7 @@ def _resolve_data_and_graph(
         if require_data:
             stored_data = cached.get("_processed_data")
             if stored_data is None:
-                raise ToolError(
-                    f"run_id '{run_id}' has no stored data. "
-                    "Re-run discover or run_algorithm to populate."
-                )
+                raise ToolError(f"run_id '{run_id}' has no stored data. Re-run discover or run_algorithm to populate.")
             df = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
     elif csv_data:
         if not adjacency_matrix:
@@ -367,17 +367,17 @@ def _resolve_data_and_graph(
         try:
             df = pd.read_csv(io.StringIO(csv_data))
         except Exception as e:
-            raise ToolError(f"Failed to parse CSV: {e}")
+            raise ToolError(f"Failed to parse CSV: {e}") from e
         try:
             adj = np.array(json.loads(adjacency_matrix))
             names = json.loads(node_names)
         except (json.JSONDecodeError, TypeError) as e:
-            raise ToolError(f"Invalid JSON: {e}")
+            raise ToolError(f"Invalid JSON: {e}") from e
         if data_diagnosis:
             try:
                 diagnosis = json.loads(data_diagnosis)
             except json.JSONDecodeError as e:
-                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}") from e
     else:
         raise ToolError("Provide either run_id or csv_data + adjacency_matrix + node_names.")
 
@@ -479,10 +479,7 @@ def estimate_effect(
         diagnosis = cached.get("data_diagnosis")
         stored_data = cached.get("_processed_data")
         if stored_data is None:
-            raise ToolError(
-                f"run_id '{run_id}' has no stored data. "
-                "Re-run discover or run_algorithm to populate."
-            )
+            raise ToolError(f"run_id '{run_id}' has no stored data. Re-run discover or run_algorithm to populate.")
         df = stored_data if isinstance(stored_data, pd.DataFrame) else pd.DataFrame(stored_data)
     elif csv_data:
         if not adjacency_matrix:
@@ -492,17 +489,17 @@ def estimate_effect(
         try:
             df = pd.read_csv(io.StringIO(csv_data))
         except Exception as e:
-            raise ToolError(f"Failed to parse CSV: {e}")
+            raise ToolError(f"Failed to parse CSV: {e}") from e
         try:
             adj = np.array(json.loads(adjacency_matrix))
             names = json.loads(node_names)
         except (json.JSONDecodeError, TypeError) as e:
-            raise ToolError(f"Invalid JSON: {e}")
+            raise ToolError(f"Invalid JSON: {e}") from e
         if data_diagnosis:
             try:
                 diagnosis = json.loads(data_diagnosis)
             except json.JSONDecodeError as e:
-                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}") from e
     else:
         raise ToolError("Provide either run_id or csv_data + adjacency_matrix + node_names.")
 
@@ -534,36 +531,40 @@ def estimate_effect(
         }
     elif graph_kind == "cpdag":
         if diagnosis is None:
-            return json.dumps({
-                "status": "rejected",
-                "treatment": treatment,
-                "outcome": outcome,
-                "reason": "CPDAG requires data diagnosis to check inference eligibility. "
-                          "Use run_id from discover, or provide data_diagnosis.",
-                "graph_kind": "cpdag",
-                "next_steps": [
-                    "Use run_id from discover/run_algorithm (includes diagnosis)",
-                    "Provide data_diagnosis with linearity and gaussian_error fields",
-                ],
-            })
+            return json.dumps(
+                {
+                    "status": "rejected",
+                    "treatment": treatment,
+                    "outcome": outcome,
+                    "reason": "CPDAG requires data diagnosis to check inference eligibility. "
+                    "Use run_id from discover, or provide data_diagnosis.",
+                    "graph_kind": "cpdag",
+                    "next_steps": [
+                        "Use run_id from discover/run_algorithm (includes diagnosis)",
+                        "Provide data_diagnosis with linearity and gaussian_error fields",
+                    ],
+                }
+            )
         is_lg = bool(diagnosis.get("linearity")) and bool(diagnosis.get("gaussian_error"))
         policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
         if not policy["allow_inference"]:
-            return json.dumps({
-                "status": "rejected",
-                "treatment": treatment,
-                "outcome": outcome,
-                "reason": policy["reason"],
-                "graph_kind": "cpdag",
-                "inference_policy": {
-                    "eligibility": False,
+            return json.dumps(
+                {
+                    "status": "rejected",
+                    "treatment": treatment,
+                    "outcome": outcome,
                     "reason": policy["reason"],
-                },
-                "next_steps": [
-                    "Try DirectLiNGAM via run_algorithm — gives unique DAG if errors are non-Gaussian",
-                    "Collect experimental data to resolve edge directions",
-                ],
-            })
+                    "graph_kind": "cpdag",
+                    "inference_policy": {
+                        "eligibility": False,
+                        "reason": policy["reason"],
+                    },
+                    "next_steps": [
+                        "Try DirectLiNGAM via run_algorithm — gives unique DAG if errors are non-Gaussian",
+                        "Collect experimental data to resolve edge directions",
+                    ],
+                }
+            )
         inference_policy = {
             "eligibility": True,
             "method": policy["method"],
@@ -571,29 +572,33 @@ def estimate_effect(
         }
         warnings_list.append("CPDAG: undirected edges dropped for estimation")
     elif graph_kind == "pag":
-        return json.dumps({
-            "status": "rejected",
-            "treatment": treatment,
-            "outcome": outcome,
-            "reason": "PAG — latent confounders possible, effects not identifiable",
-            "graph_kind": "pag",
-            "inference_policy": {
-                "eligibility": False,
-                "reason": "PAG — latent confounders possible",
-            },
-            "next_steps": [
-                "Use PC (without latent variable assumption) for a CPDAG instead",
-                "Collect experimental data",
-            ],
-        })
+        return json.dumps(
+            {
+                "status": "rejected",
+                "treatment": treatment,
+                "outcome": outcome,
+                "reason": "PAG — latent confounders possible, effects not identifiable",
+                "graph_kind": "pag",
+                "inference_policy": {
+                    "eligibility": False,
+                    "reason": "PAG — latent confounders possible",
+                },
+                "next_steps": [
+                    "Use PC (without latent variable assumption) for a CPDAG instead",
+                    "Collect experimental data",
+                ],
+            }
+        )
     else:
-        return json.dumps({
-            "status": "rejected",
-            "treatment": treatment,
-            "outcome": outcome,
-            "reason": f"Unknown graph kind: {graph_kind}",
-            "graph_kind": graph_kind,
-        })
+        return json.dumps(
+            {
+                "status": "rejected",
+                "treatment": treatment,
+                "outcome": outcome,
+                "reason": f"Unknown graph kind: {graph_kind}",
+                "graph_kind": graph_kind,
+            }
+        )
 
     # --- Sanitize graph ---
     clean_adj, dropped_edges = _sanitize_for_estimation(adj, names)
@@ -611,7 +616,7 @@ def estimate_effect(
         try:
             conf_list = json.loads(confounders)
         except json.JSONDecodeError as e:
-            raise ToolError(f"Invalid confounders JSON: {e}")
+            raise ToolError(f"Invalid confounders JSON: {e}") from e
         conf_source = "user-specified"
     else:
         conf_list = _identify_confounders(clean_adj, names, t_idx, o_idx)
@@ -623,31 +628,37 @@ def estimate_effect(
     # --- Run estimation ---
     try:
         from causal_copilot.mcp.estimation import (
-            estimate_linear,
-            estimate_matching,
             estimate_dml,
             estimate_drl,
-            estimate_metalearner,
             estimate_iv,
+            estimate_linear,
+            estimate_matching,
+            estimate_metalearner,
         )
 
         if selected_method == "linear":
             dot_graph = _adj_to_dot(clean_adj, names)
             with _pipeline_cwd():
                 estimates = estimate_linear(
-                    df, dot_graph, treatment, outcome,
-                    control_value, treatment_value,
+                    df,
+                    dot_graph,
+                    treatment,
+                    outcome,
+                    control_value,
+                    treatment_value,
                 )
             method_detail = "DoWhy backdoor.linear_regression"
 
         elif selected_method == "matching":
-            match_conf = conf_list if conf_list else [
-                c for c in names if c != treatment and c != outcome
-            ]
+            match_conf = conf_list if conf_list else [c for c in names if c != treatment and c != outcome]
             with _pipeline_cwd():
                 estimates = estimate_matching(
-                    df, treatment, outcome, match_conf,
-                    int(control_value), int(treatment_value),
+                    df,
+                    treatment,
+                    outcome,
+                    match_conf,
+                    int(control_value),
+                    int(treatment_value),
                 )
             method_detail = "Propensity Score Matching (sklearn)"
 
@@ -658,8 +669,13 @@ def estimate_effect(
             W_col = conf_list if conf_list else []
             with _pipeline_cwd():
                 estimates = estimate_dml(
-                    df, treatment, outcome, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                 )
             method_detail = "Double Machine Learning (EconML LinearDML)"
 
@@ -670,8 +686,13 @@ def estimate_effect(
             W_col = conf_list if conf_list else []
             with _pipeline_cwd():
                 estimates = estimate_drl(
-                    df, treatment, outcome, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                 )
             method_detail = "Doubly Robust Learning (EconML LinearDRL)"
 
@@ -679,8 +700,12 @@ def estimate_effect(
             X_col = [c for c in names if c != treatment and c != outcome]
             with _pipeline_cwd():
                 estimates = estimate_metalearner(
-                    df, treatment, outcome, X_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    X_col,
+                    control_value,
+                    treatment_value,
                 )
             method_detail = "Meta-Learner TLearner (EconML)"
 
@@ -689,26 +714,34 @@ def estimate_effect(
             if not iv_var:
                 iv_var = _find_instrument(clean_adj, names, t_idx, o_idx)
             if not iv_var:
-                return json.dumps({
-                    "status": "error",
-                    "treatment": treatment,
-                    "outcome": outcome,
-                    "method": "iv",
-                    "error": "No valid instrument variable found in graph. "
-                             "Provide instrument parameter or use a different method.",
-                    "next_steps": [
-                        "Specify instrument variable explicitly",
-                        "Use method='dml' or method='drl' instead",
-                    ],
-                })
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "treatment": treatment,
+                        "outcome": outcome,
+                        "method": "iv",
+                        "error": "No valid instrument variable found in graph. "
+                        "Provide instrument parameter or use a different method.",
+                        "next_steps": [
+                            "Specify instrument variable explicitly",
+                            "Use method='dml' or method='drl' instead",
+                        ],
+                    }
+                )
             if iv_var not in names or iv_var not in df.columns:
                 raise ToolError(f"Instrument '{iv_var}' not in data/graph.")
             X_col = [c for c in names if c not in (treatment, outcome, iv_var)]
             W_col = conf_list if conf_list else []
             with _pipeline_cwd():
                 estimates = estimate_iv(
-                    df, treatment, outcome, iv_var, X_col, W_col,
-                    control_value, treatment_value,
+                    df,
+                    treatment,
+                    outcome,
+                    iv_var,
+                    X_col,
+                    W_col,
+                    control_value,
+                    treatment_value,
                 )
             method_detail = f"Instrumental Variables (EconML LinearDRIV, instrument={iv_var})"
 
@@ -718,21 +751,27 @@ def estimate_effect(
     except ToolError:
         raise
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "treatment": treatment,
-            "outcome": outcome,
-            "method": selected_method,
-            "error": f"Estimation failed: {e}",
-            "next_steps": [
-                "Try a different method (linear, matching, dml, drl, metalearner, iv)",
-                "Check that treatment and outcome columns contain valid numeric data",
-            ],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "treatment": treatment,
+                "outcome": outcome,
+                "method": selected_method,
+                "error": f"Estimation failed: {e}",
+                "next_steps": [
+                    "Try a different method (linear, matching, dml, drl, metalearner, iv)",
+                    "Check that treatment and outcome columns contain valid numeric data",
+                ],
+            }
+        )
 
     # --- Build result ---
     interpretation = _build_interpretation(
-        treatment, outcome, selected_method, estimates, conf_list,
+        treatment,
+        outcome,
+        selected_method,
+        estimates,
+        conf_list,
     )
 
     result_payload: dict[str, Any] = {
@@ -811,7 +850,7 @@ def diagnose_data(csv_data: str) -> str:
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        raise ToolError(f"Failed to parse CSV: {e}")
+        raise ToolError(f"Failed to parse CSV: {e}") from e
 
     if df.empty or df.shape[1] < 2:
         raise ToolError("Need at least 2 columns of data.")
@@ -876,11 +915,7 @@ def diagnose_data(csv_data: str) -> str:
         high_corr = getattr(gs.user_data, "high_corr_feature_groups", None)
         if high_corr and isinstance(high_corr, dict):
             # Only include groups that actually have correlated partners
-            corr_groups = {
-                k: list(v) if not isinstance(v, list) else v
-                for k, v in high_corr.items()
-                if v
-            }
+            corr_groups = {k: list(v) if not isinstance(v, list) else v for k, v in high_corr.items() if v}
             if corr_groups:
                 diagnosis["high_correlation_groups"] = corr_groups
 
@@ -889,9 +924,7 @@ def diagnose_data(csv_data: str) -> str:
             desc = df[gs.user_data.selected_features].describe()
             desc_dict = {}
             for col in desc.columns:
-                desc_dict[col] = {
-                    k: round(float(v), 4) for k, v in desc[col].items()
-                }
+                desc_dict[col] = {k: round(float(v), 4) for k, v in desc[col].items()}
             diagnosis["descriptive_stats"] = desc_dict
         except Exception:
             pass  # Non-numeric data; skip
@@ -926,17 +959,21 @@ def diagnose_data(csv_data: str) -> str:
         # Build data-adaptive knowledge prompt
         knowledge_prompt = _build_knowledge_prompt(diagnosis)
 
-        return json.dumps({
-            "status": "ok",
-            "diagnosis": diagnosis,
-            "recommendations": recommendations,
-            "knowledge_prompt": knowledge_prompt,
-            "resources": {
-                "ci_test_guide": "causal://guides/ci-tests",
-                "score_function_guide": "causal://guides/score-functions",
-                "algorithms": "causal://algorithms",
+        return json.dumps(
+            {
+                "status": "ok",
+                "diagnosis": diagnosis,
+                "recommendations": recommendations,
+                "knowledge_prompt": knowledge_prompt,
+                "resources": {
+                    "ci_test_guide": "causal://guides/ci-tests",
+                    "score_function_guide": "causal://guides/score-functions",
+                    "algorithms": "causal://algorithms",
+                },
             },
-        }, indent=2, cls=_NumpyEncoder)
+            indent=2,
+            cls=_NumpyEncoder,
+        )
     except Exception as e:
         return json.dumps({"status": "error", "error": f"Diagnosis failed: {e}"})
 
@@ -979,12 +1016,12 @@ def run_algorithm(
     try:
         hp = json.loads(hyperparameters)
     except json.JSONDecodeError as e:
-        raise ToolError(f"Invalid hyperparameters JSON: {e}")
+        raise ToolError(f"Invalid hyperparameters JSON: {e}") from e
 
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        raise ToolError(f"Failed to parse CSV: {e}")
+        raise ToolError(f"Failed to parse CSV: {e}") from e
 
     if df.empty or df.shape[1] < 2:
         raise ToolError("Need at least 2 columns of data.")
@@ -1009,8 +1046,15 @@ def run_algorithm(
             if allow_resolver_overrides:
                 # Resolver overrides: correct CI test / score func for the data
                 ci_test_algos = {
-                    "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
-                    "BAMB", "HITONMB", "IAMBnPC", "MBOR",
+                    "PC",
+                    "FCI",
+                    "CDNOD",
+                    "PCParallel",
+                    "InterIAMB",
+                    "BAMB",
+                    "HITONMB",
+                    "IAMBnPC",
+                    "MBOR",
                 }
                 if algorithm in ci_test_algos:
                     resolved = resolve_ci_test(gs.statistics)
@@ -1045,7 +1089,9 @@ def run_algorithm(
             # Inject structural constraints
             _ra_warnings: list[str] = []
             bk_spec = _parse_background_knowledge(
-                forbidden_edges, required_edges, _ra_warnings,
+                forbidden_edges,
+                required_edges,
+                _ra_warnings,
             )
             if bk_spec:
                 bk_algos = {"PC", "FCI", "CDNOD", "PCParallel"}
@@ -1054,9 +1100,7 @@ def run_algorithm(
                 elif _ra_warnings:
                     pass  # parse errors already recorded
                 else:
-                    _ra_warnings.append(
-                        f"{algorithm} does not support background_knowledge"
-                    )
+                    _ra_warnings.append(f"{algorithm} does not support background_knowledge")
             if _ra_warnings:
                 resolver_adjustments["background_knowledge"] = {
                     "warnings": _ra_warnings,
@@ -1146,7 +1190,7 @@ def discover(
     try:
         df = pd.read_csv(io.StringIO(csv_data))
     except Exception as e:
-        raise ToolError(f"Failed to parse CSV: {e}")
+        raise ToolError(f"Failed to parse CSV: {e}") from e
 
     if df.empty or df.shape[1] < 2:
         raise ToolError("Need at least 2 columns of data.")
@@ -1189,8 +1233,10 @@ def discover(
                 except Exception as hp_err:
                     warnings.append(f"HP selector failed, using defaults: {hp_err}")
                     from causal_copilot.mcp.offline import get_default_hp
+
                     gs.algorithm.algorithm_arguments = get_default_hp(
-                        algorithm, gs.statistics,
+                        algorithm,
+                        gs.statistics,
                     )
             else:
                 # Full LLM path: Filter → Reranker → HP
@@ -1203,18 +1249,18 @@ def discover(
                     gs = HyperparameterSelector(args).forward(gs)
                     used_planner = "llm"
                 except Exception as llm_err:
-                    warnings.append(
-                        f"LLM selection failed, using rule-based: {llm_err}"
-                    )
+                    warnings.append(f"LLM selection failed, using rule-based: {llm_err}")
                     from causal_copilot.mcp.offline import (
                         get_default_hp,
                         select_algorithm_offline,
                     )
+
                     gs.algorithm.selected_algorithm = select_algorithm_offline(
                         gs.statistics,
                     )
                     gs.algorithm.algorithm_arguments = get_default_hp(
-                        gs.algorithm.selected_algorithm, gs.statistics,
+                        gs.algorithm.selected_algorithm,
+                        gs.statistics,
                     )
                     used_planner = "rule-based-fallback"
 
@@ -1223,8 +1269,15 @@ def discover(
             algo_args = dict(gs.algorithm.algorithm_arguments or {})
 
             ci_test_algos = {
-                "PC", "FCI", "CDNOD", "PCParallel", "InterIAMB",
-                "BAMB", "HITONMB", "IAMBnPC", "MBOR",
+                "PC",
+                "FCI",
+                "CDNOD",
+                "PCParallel",
+                "InterIAMB",
+                "BAMB",
+                "HITONMB",
+                "IAMBnPC",
+                "MBOR",
             }
             if algo_name in ci_test_algos:
                 algo_args["indep_test"] = resolve_ci_test(gs.statistics)
@@ -1232,7 +1285,8 @@ def discover(
             score_algos = {"GES", "FGES", "XGES", "GRaSP", "ExactSearch", "BOSS"}
             if algo_name in score_algos:
                 algo_args["score_func"] = resolve_score_func(
-                    gs.statistics, algo_name,
+                    gs.statistics,
+                    algo_name,
                 )
 
             if algo_name == "PC" and gs.statistics.missingness:
@@ -1240,7 +1294,9 @@ def discover(
 
             # Inject structural constraints (forbidden/required edges)
             bk_spec = _parse_background_knowledge(
-                forbidden_edges, required_edges, warnings,
+                forbidden_edges,
+                required_edges,
+                warnings,
             )
             if bk_spec:
                 bk_algos = {"PC", "FCI", "CDNOD", "PCParallel"}
@@ -1263,6 +1319,7 @@ def discover(
             if not is_ts:
                 try:
                     from postprocess.judge import Judge
+
                     gs = Judge(gs, args).forward(gs, "cot_all_relation", 1)
                 except Exception as pp_err:
                     warnings.append(f"Postprocessing skipped: {pp_err}")
@@ -1288,8 +1345,7 @@ def discover(
             if score_calc:
                 # Extract {algo: final_score} for concise view
                 selection_reasoning["scores"] = {
-                    k: v.get("final_score") if isinstance(v, dict) else v
-                    for k, v in score_calc.items()
+                    k: v.get("final_score") if isinstance(v, dict) else v for k, v in score_calc.items()
                 }
         hp_json = getattr(gs.algorithm, "algorithm_arguments_json", None)
         if hp_json and isinstance(hp_json, dict):
@@ -1392,13 +1448,13 @@ def inspect_graph(
             adj_list = json.loads(adjacency_matrix)
             names = json.loads(node_names)
         except (json.JSONDecodeError, TypeError) as e:
-            raise ToolError(f"Invalid JSON: {e}")
+            raise ToolError(f"Invalid JSON: {e}") from e
         adj = np.array(adj_list)
         if data_diagnosis:
             try:
                 diagnosis = json.loads(data_diagnosis)
             except json.JSONDecodeError as e:
-                raise ToolError(f"Invalid data_diagnosis JSON: {e}")
+                raise ToolError(f"Invalid data_diagnosis JSON: {e}") from e
     else:
         raise ToolError("Provide either run_id or adjacency_matrix + node_names.")
 
@@ -1437,17 +1493,19 @@ def inspect_graph(
         }
     elif graph_kind == "cpdag":
         if diagnosis is None:
-            return json.dumps({
-                "status": "needs_more_input",
-                "graph_kind": graph_kind,
-                "graph_stats": graph_stats,
-                "missing_inputs": ["data_diagnosis"],
-                "next_step": (
-                    "CPDAG inference requires data diagnosis (linearity + gaussianity). "
-                    "Use run_id from discover/run_algorithm, or provide data_diagnosis "
-                    "with linearity and gaussian_error fields."
-                ),
-            })
+            return json.dumps(
+                {
+                    "status": "needs_more_input",
+                    "graph_kind": graph_kind,
+                    "graph_stats": graph_stats,
+                    "missing_inputs": ["data_diagnosis"],
+                    "next_step": (
+                        "CPDAG inference requires data diagnosis (linearity + gaussianity). "
+                        "Use run_id from discover/run_algorithm, or provide data_diagnosis "
+                        "with linearity and gaussian_error fields."
+                    ),
+                }
+            )
         is_lg = bool(diagnosis.get("linearity")) and bool(diagnosis.get("gaussian_error"))
         policy = check_inference_policy(adj, is_linear_gaussian=is_lg)
         inference_policy = {
@@ -1456,7 +1514,8 @@ def inspect_graph(
             "reason": policy["reason"],
             "assumptions_used": (
                 ["linearity", "Gaussian errors", "causal sufficiency"]
-                if is_lg else ["causal sufficiency", "faithfulness"]
+                if is_lg
+                else ["causal sufficiency", "faithfulness"]
             ),
         }
     elif graph_kind == "pag":
@@ -1516,37 +1575,23 @@ def inspect_graph(
         key_findings.append("PAG — latent confounders possible")
 
     if inference_policy["eligibility"]:
-        key_findings.append(
-            f"Causal inference possible via {inference_policy['method']}"
-        )
+        key_findings.append(f"Causal inference possible via {inference_policy['method']}")
     else:
-        key_findings.append(
-            f"Causal inference blocked: {inference_policy['reason']}"
-        )
+        key_findings.append(f"Causal inference blocked: {inference_policy['reason']}")
 
     if query_assessment:
         if query_assessment["effect_identifiable"]:
-            key_findings.append(
-                f"Effect of {treatment} on {outcome} is identifiable"
-            )
+            key_findings.append(f"Effect of {treatment} on {outcome} is identifiable")
         elif query_assessment["directed_path_exists"]:
-            key_findings.append(
-                f"Path {treatment} -> {outcome} exists but effect not identifiable"
-            )
+            key_findings.append(f"Path {treatment} -> {outcome} exists but effect not identifiable")
         else:
-            key_findings.append(
-                f"No directed path from {treatment} to {outcome}"
-            )
+            key_findings.append(f"No directed path from {treatment} to {outcome}")
 
     limitations = []
     if graph_kind != "dag":
-        limitations.append(
-            f"Graph is {graph_kind.upper()} — some causal directions uncertain"
-        )
+        limitations.append(f"Graph is {graph_kind.upper()} — some causal directions uncertain")
     if n_bidirected > 0:
-        limitations.append(
-            f"{n_bidirected} bidirected edges suggest latent confounders"
-        )
+        limitations.append(f"{n_bidirected} bidirected edges suggest latent confounders")
 
     # --- Result ---
     result: dict[str, Any] = {
@@ -1576,21 +1621,13 @@ def inspect_graph(
                 + ") to estimate the causal effect"
             )
     if graph_kind == "cpdag" and not inference_policy["eligibility"]:
-        next_steps.append(
-            "Try DirectLiNGAM via run_algorithm — LiNGAM gives unique DAG if errors are non-Gaussian"
-        )
+        next_steps.append("Try DirectLiNGAM via run_algorithm — LiNGAM gives unique DAG if errors are non-Gaussian")
     if graph_kind == "pag":
-        next_steps.append(
-            "PAG detected — consider using PC (without latent variable assumption) for a CPDAG instead"
-        )
+        next_steps.append("PAG detected — consider using PC (without latent variable assumption) for a CPDAG instead")
     if not treatment and not outcome and inference_policy["eligibility"]:
-        next_steps.append(
-            "Specify treatment and outcome to assess a specific causal query"
-        )
+        next_steps.append("Specify treatment and outcome to assess a specific causal query")
     if inference_policy["eligibility"] and not treatment:
-        next_steps.append(
-            "Call estimate_effect(treatment='X', outcome='Y') to estimate causal effects"
-        )
+        next_steps.append("Call estimate_effect(treatment='X', outcome='Y') to estimate causal effects")
     if next_steps:
         result["next_steps"] = next_steps
 
@@ -1634,7 +1671,10 @@ def refute_estimate(
         JSON with original_estimate, refutation results, interpretation
     """
     df, adj, names, diagnosis = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
     )
 
     if treatment not in df.columns:
@@ -1645,11 +1685,13 @@ def refute_estimate(
     # Check graph kind for honest gate
     graph_kind = classify_graph_kind(adj)
     if graph_kind == "pag":
-        return json.dumps({
-            "status": "rejected",
-            "reason": "PAG — effects not identifiable, cannot refute",
-            "graph_kind": "pag",
-        })
+        return json.dumps(
+            {
+                "status": "rejected",
+                "reason": "PAG — effects not identifiable, cannot refute",
+                "graph_kind": "pag",
+            }
+        )
 
     clean_adj, _ = _sanitize_for_estimation(adj, names)
     dot_graph = _adj_to_dot(clean_adj, names)
@@ -1659,14 +1701,20 @@ def refute_estimate(
 
         with _pipeline_cwd():
             results = run_refutation(
-                df, dot_graph, treatment, outcome,
-                control_value, treatment_value,
+                df,
+                dot_graph,
+                treatment,
+                outcome,
+                control_value,
+                treatment_value,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Refutation failed: {e}",
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Refutation failed: {e}",
+            }
+        )
 
     # Interpret robustness
     original = results["original_estimate"]
@@ -1689,10 +1737,8 @@ def refute_estimate(
     results["robust"] = robust
     if issues:
         results["robustness_issues"] = issues
-    results["interpretation"] = (
-        f"The causal effect estimate of {treatment} on {outcome} "
-        + ("appears robust across refutation tests."
-           if robust else "shows sensitivity — interpret with caution.")
+    results["interpretation"] = f"The causal effect estimate of {treatment} on {outcome} " + (
+        "appears robust across refutation tests." if robust else "shows sensitivity — interpret with caution."
     )
     results["next_steps"] = [
         "If robust: the estimate is reliable under standard assumptions",
@@ -1732,7 +1778,10 @@ def estimate_counterfactual(
         JSON with observed values, counterfactual values, and causal effect
     """
     df, adj, names, _ = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
     )
 
     if treatment not in names or treatment not in df.columns:
@@ -1751,15 +1800,22 @@ def estimate_counterfactual(
 
         with _pipeline_cwd():
             results = run_counterfactual(
-                df, clean_adj, names, treatment, outcome,
-                intervention_value, observed_row_index,
+                df,
+                clean_adj,
+                names,
+                treatment,
+                outcome,
+                intervention_value,
+                observed_row_index,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Counterfactual estimation failed: {e}",
-            "next_steps": ["Ensure graph is a DAG", "Check data has no missing values"],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Counterfactual estimation failed: {e}",
+                "next_steps": ["Ensure graph is a DAG", "Check data has no missing values"],
+            }
+        )
 
     obs_y = results["observed"][outcome]
     cf_y = results["counterfactual"][outcome]
@@ -1775,8 +1831,7 @@ def estimate_counterfactual(
     results["next_steps"] = [
         f"simulate_intervention(treatment='{treatment}', outcome='{outcome}', "
         f"intervention_value={intervention_value}) for population-level simulation",
-        f"refute_estimate(treatment='{treatment}', outcome='{outcome}') "
-        "to validate the causal model",
+        f"refute_estimate(treatment='{treatment}', outcome='{outcome}') to validate the causal model",
     ]
 
     return json.dumps(results, indent=2, cls=_NumpyEncoder)
@@ -1810,7 +1865,10 @@ def attribute_anomaly(
         JSON with attribution scores per parent node, sorted by impact
     """
     df, adj, names, _ = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
     )
 
     if target_node not in names or target_node not in df.columns:
@@ -1827,18 +1885,24 @@ def attribute_anomaly(
 
         with _pipeline_cwd():
             results = run_anomaly_attribution(
-                df, clean_adj, names, target_node,
-                anomaly_threshold_percentile, num_samples,
+                df,
+                clean_adj,
+                names,
+                target_node,
+                anomaly_threshold_percentile,
+                num_samples,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Anomaly attribution failed: {e}",
-            "next_steps": [
-                "Ensure target_node has parent nodes in the graph",
-                "Ensure graph is a DAG",
-            ],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Anomaly attribution failed: {e}",
+                "next_steps": [
+                    "Ensure target_node has parent nodes in the graph",
+                    "Ensure graph is a DAG",
+                ],
+            }
+        )
 
     results["status"] = "ok"
 
@@ -1849,18 +1913,12 @@ def attribute_anomaly(
         if ms is not None and abs(ms) > 0.01:
             top_causes.append(f"{node} (score={ms:.3f})")
     if top_causes:
-        results["interpretation"] = (
-            f"Top root causes of anomalies in {target_node}: "
-            + ", ".join(top_causes[:5])
-        )
+        results["interpretation"] = f"Top root causes of anomalies in {target_node}: " + ", ".join(top_causes[:5])
     else:
-        results["interpretation"] = (
-            f"No strong anomaly drivers found for {target_node}."
-        )
+        results["interpretation"] = f"No strong anomaly drivers found for {target_node}."
 
     results["next_steps"] = [
-        f"estimate_effect(treatment='<top_cause>', outcome='{target_node}') "
-        "to quantify the causal effect",
+        f"estimate_effect(treatment='<top_cause>', outcome='{target_node}') to quantify the causal effect",
     ]
 
     return json.dumps(results, indent=2, cls=_NumpyEncoder)
@@ -1898,7 +1956,7 @@ def attribute_distribution_change(
     try:
         df_new = pd.read_csv(io.StringIO(csv_data_new))
     except Exception as e:
-        raise ToolError(f"Failed to parse csv_data_new: {e}")
+        raise ToolError(f"Failed to parse csv_data_new: {e}") from e
 
     if run_id:
         cached = get_store().get(run_id)
@@ -1918,7 +1976,7 @@ def attribute_distribution_change(
             adj = np.array(json.loads(adjacency_matrix))
             names = json.loads(node_names)
         except Exception as e:
-            raise ToolError(f"Invalid input: {e}")
+            raise ToolError(f"Invalid input: {e}") from e
     else:
         raise ToolError("Provide either run_id or csv_data_old + adjacency_matrix + node_names.")
 
@@ -1936,17 +1994,23 @@ def attribute_distribution_change(
 
         with _pipeline_cwd():
             results = run_distribution_change(
-                df_old, df_new, clean_adj, names, target_node,
+                df_old,
+                df_new,
+                clean_adj,
+                names,
+                target_node,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Distribution change attribution failed: {e}",
-            "next_steps": [
-                "Ensure both datasets have the same columns",
-                "Ensure graph is a DAG",
-            ],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Distribution change attribution failed: {e}",
+                "next_steps": [
+                    "Ensure both datasets have the same columns",
+                    "Ensure graph is a DAG",
+                ],
+            }
+        )
 
     results["status"] = "ok"
 
@@ -1954,9 +2018,8 @@ def attribute_distribution_change(
     for node, score in results.get("attributions", {}).items():
         if score is not None and abs(score) > 0.01:
             top_changes.append(f"{node} ({score:+.3f})")
-    results["interpretation"] = (
-        f"Distribution of {target_node} changed. Top mechanism shifts: "
-        + (", ".join(top_changes[:5]) if top_changes else "no significant shifts detected")
+    results["interpretation"] = f"Distribution of {target_node} changed. Top mechanism shifts: " + (
+        ", ".join(top_changes[:5]) if top_changes else "no significant shifts detected"
     )
 
     return json.dumps(results, indent=2, cls=_NumpyEncoder)
@@ -1997,7 +2060,10 @@ def simulate_intervention(
         JSON with original and intervention outcome distributions, mean change
     """
     df, adj, names, _ = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
     )
 
     if treatment not in names or treatment not in df.columns:
@@ -2016,15 +2082,23 @@ def simulate_intervention(
 
         with _pipeline_cwd():
             results = run_intervention_simulation(
-                df, clean_adj, names, treatment, outcome,
-                intervention_value, shift, num_samples,
+                df,
+                clean_adj,
+                names,
+                treatment,
+                outcome,
+                intervention_value,
+                shift,
+                num_samples,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Intervention simulation failed: {e}",
-            "next_steps": ["Ensure graph is a DAG"],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Intervention simulation failed: {e}",
+                "next_steps": ["Ensure graph is a DAG"],
+            }
+        )
 
     results["status"] = "ok"
 
@@ -2075,7 +2149,10 @@ def compute_feature_importance(
         JSON with feature importance scores sorted by magnitude
     """
     df, adj, names, diagnosis = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
         data_diagnosis=data_diagnosis,
     )
 
@@ -2092,24 +2169,24 @@ def compute_feature_importance(
         with _pipeline_cwd():
             results = _compute_fi(df, target_node, is_linear)
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Feature importance failed: {e}",
-            "next_steps": ["Check data has enough observations and variance."],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Feature importance failed: {e}",
+                "next_steps": ["Check data has enough observations and variance."],
+            }
+        )
 
     results["status"] = "ok"
 
     # Interpretation
     top = results["top_features"][:3]
-    results["interpretation"] = (
-        f"Top drivers of {target_node}: {', '.join(top)}. "
-        f"Method: {results['method']}."
-    )
+    results["interpretation"] = f"Top drivers of {target_node}: {', '.join(top)}. Method: {results['method']}."
 
     results["next_steps"] = [
-        f"estimate_effect(treatment='{top[0]}', outcome='{target_node}') "
-        "to quantify causal effect of the top feature" if top else "",
+        f"estimate_effect(treatment='{top[0]}', outcome='{target_node}') to quantify causal effect of the top feature"
+        if top
+        else "",
         "inspect_graph() to see causal structure between these variables",
     ]
 
@@ -2144,7 +2221,10 @@ def validate_graph(
         JSON with falsification test results and interpretation
     """
     df, adj, names, _ = _resolve_data_and_graph(
-        run_id, csv_data, adjacency_matrix, node_names,
+        run_id,
+        csv_data,
+        adjacency_matrix,
+        node_names,
     )
 
     graph_kind = classify_graph_kind(adj)
@@ -2159,14 +2239,19 @@ def validate_graph(
 
         with _pipeline_cwd():
             results = run_graph_falsification(
-                df, clean_adj, names, n_permutations,
+                df,
+                clean_adj,
+                names,
+                n_permutations,
             )
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "error": f"Graph falsification failed: {e}",
-            "next_steps": ["Ensure graph is a DAG and data has enough observations."],
-        })
+        return json.dumps(
+            {
+                "status": "error",
+                "error": f"Graph falsification failed: {e}",
+                "next_steps": ["Ensure graph is a DAG and data has enough observations."],
+            }
+        )
 
     results["status"] = "ok"
     results["graph_kind"] = graph_kind
@@ -2187,9 +2272,7 @@ def validate_graph(
                 "The causal structure may not fit the data well."
             )
     else:
-        results["interpretation"] = (
-            "Falsification test completed. See falsification_result for details."
-        )
+        results["interpretation"] = "Falsification test completed. See falsification_result for details."
 
     results["next_steps"] = [
         "discover() to re-run causal discovery if graph doesn't fit",
@@ -2200,12 +2283,11 @@ def validate_graph(
 
 
 # ── MCP Resources ─────────────────────────────────────────────────────
-from causal_copilot.mcp.resources import (
-    get_algorithm_resources,
+from causal_copilot.mcp.resources import (  # noqa: E402
     get_algorithm_content,
-    get_hp_content,
+    get_algorithm_resources,
     get_guide_content,
-    get_all_guide_names,
+    get_hp_content,
 )
 
 
@@ -2243,7 +2325,7 @@ def guide(guide_name: str):
 
 
 # ── MCP Prompts ───────────────────────────────────────────────────────
-from causal_copilot.mcp.prompts import PROMPTS
+from causal_copilot.mcp.prompts import PROMPTS  # noqa: E402
 
 
 @mcp.prompt()

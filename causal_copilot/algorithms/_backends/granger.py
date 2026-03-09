@@ -43,18 +43,13 @@ class GrangerCausalityBackend(Backend):
                         maxlag=max_lag,
                         verbose=False,
                     )
-                    p_values = [
-                        test_result[lag + 1][0][criterion][1]
-                        for lag in range(max_lag)
-                    ]
+                    p_values = [test_result[lag + 1][0][criterion][1] for lag in range(max_lag)]
                     if min(p_values) < alpha:
                         adj_matrix[i, j] = 1  # j Granger-causes i
                 except (ValueError, KeyError, RuntimeError) as exc:
                     n_failed += 1
                     if n_failed >= n_pairs:
-                        raise RuntimeError(
-                            f"All {n_pairs} Granger tests failed. Last error: {exc}"
-                        ) from exc
+                        raise RuntimeError(f"All {n_pairs} Granger tests failed. Last error: {exc}") from exc
 
         info = {"lag": max_lag, "nodes": node_names, "n_failed_pairs": n_failed}
         return adj_matrix, info, None

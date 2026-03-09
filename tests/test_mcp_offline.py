@@ -1,4 +1,5 @@
 """Tests for offline (rule-based) algorithm selection and default HP."""
+
 from unittest.mock import MagicMock
 
 

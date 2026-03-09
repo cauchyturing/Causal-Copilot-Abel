@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass(frozen=True)
@@ -15,8 +14,8 @@ class AlgorithmCapability:
     handles_nonlinear: bool = False
     handles_non_gaussian: bool = False
     handles_time_series: bool = False
-    max_variables: Optional[int] = None
-    recommended_n_min: Optional[int] = None
+    max_variables: int | None = None
+    recommended_n_min: int | None = None
 
 
 CAPABILITY_MATRIX: dict[str, AlgorithmCapability] = {

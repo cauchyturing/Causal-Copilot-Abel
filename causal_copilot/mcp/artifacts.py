@@ -4,6 +4,7 @@ Each discover/run_algorithm call returns a run_id. Other tools
 (refine_graph, estimate_effects, explain_result) can reference
 a run_id to access cached results instead of re-parsing CSV.
 """
+
 from __future__ import annotations
 
 import time
@@ -44,10 +45,7 @@ class RunStore:
         """Remove all expired entries."""
         now = time.time()
         with self._lock:
-            expired = [
-                k for k, v in self._runs.items()
-                if now - v["created_at"] > self.ttl_seconds
-            ]
+            expired = [k for k, v in self._runs.items() if now - v["created_at"] > self.ttl_seconds]
             for k in expired:
                 del self._runs[k]
 

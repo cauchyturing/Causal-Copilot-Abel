@@ -3,17 +3,14 @@
 Handles sys.path setup, CWD management, and GlobalState construction
 so the MCP server can call pipeline modules directly.
 """
+
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
-
-import numpy as np
-import pandas as pd
 
 # Pipeline root = project root (two levels up from this file)
 PIPELINE_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -27,6 +24,7 @@ def _ensure_pipeline_importable():
     """
     try:
         import global_setting.state  # noqa: F401
+
         return  # Already importable (pip-installed or previously patched)
     except ImportError:
         pass
@@ -98,33 +96,40 @@ def adj_to_edges(adj, node_names):
             if v == 0:
                 continue
             if v == 1:  # j->i
-                edges.append({
-                    "from": node_names[j],
-                    "to": node_names[i],
-                    "type": "directed",
-                })
+                edges.append(
+                    {
+                        "from": node_names[j],
+                        "to": node_names[i],
+                        "type": "directed",
+                    }
+                )
             elif v == 2 and i < j:  # undirected, emit once
-                edges.append({
-                    "from": node_names[i],
-                    "to": node_names[j],
-                    "type": "undirected",
-                })
+                edges.append(
+                    {
+                        "from": node_names[i],
+                        "to": node_names[j],
+                        "type": "undirected",
+                    }
+                )
             elif v == 3 and i < j:  # bidirected, emit once
-                edges.append({
-                    "from": node_names[i],
-                    "to": node_names[j],
-                    "type": "bidirected",
-                })
+                edges.append(
+                    {
+                        "from": node_names[i],
+                        "to": node_names[j],
+                        "type": "bidirected",
+                    }
+                )
             elif v in (4, 5, 6, 7) and i < j:  # PAG edge types, emit once
                 # 4=circle-tail, 5=circle-arrow, 6=tail-tail, 7=arrow-arrow
-                pag_labels = {4: "circle-tail", 5: "circle-arrow",
-                              6: "tail-tail", 7: "arrow-arrow"}
-                edges.append({
-                    "from": node_names[i],
-                    "to": node_names[j],
-                    "type": "pag",
-                    "pag_detail": pag_labels.get(v, f"pag-{v}"),
-                })
+                pag_labels = {4: "circle-tail", 5: "circle-arrow", 6: "tail-tail", 7: "arrow-arrow"}
+                edges.append(
+                    {
+                        "from": node_names[i],
+                        "to": node_names[j],
+                        "type": "pag",
+                        "pag_detail": pag_labels.get(v, f"pag-{v}"),
+                    }
+                )
 
     return edges
 
@@ -146,9 +151,7 @@ def serialize_result(gs, node_names=None, provenance=None):
         return {"status": "error", "error": "No graph produced"}
 
     if node_names is None:
-        node_names = gs.user_data.selected_features or [
-            f"V{i}" for i in range(adj.shape[0])
-        ]
+        node_names = gs.user_data.selected_features or [f"V{i}" for i in range(adj.shape[0])]
 
     from causal_discovery.pdag_policy import classify_graph_kind, get_identifiable_edges
 
@@ -178,9 +181,9 @@ def serialize_result(gs, node_names=None, provenance=None):
         edge_confidence = {}
         # Map edge types to bootstrap probability layers
         layer_map = {
-            "directed": "certain_edges",      # j→i
-            "undirected": "uncertain_edges",   # j-i
-            "bidirected": "bi_edges",          # j↔i
+            "directed": "certain_edges",  # j→i
+            "undirected": "uncertain_edges",  # j-i
+            "bidirected": "bi_edges",  # j↔i
         }
         for e in edges:
             etype = e["type"]
@@ -196,8 +199,7 @@ def serialize_result(gs, node_names=None, provenance=None):
                 ti = node_names.index(tgt)
                 # mat[i,j] = P(j→i) for directed; symmetric for undirected/bi
                 conf = float(prob_mat[ti, si])
-                arrow = "->" if etype == "directed" else (
-                    "-" if etype == "undirected" else "<->")
+                arrow = "->" if etype == "directed" else ("-" if etype == "undirected" else "<->")
                 edge_confidence[f"{src}{arrow}{tgt}"] = round(conf, 3)
             except (ValueError, IndexError):
                 pass
@@ -208,8 +210,7 @@ def serialize_result(gs, node_names=None, provenance=None):
     llm_decisions = getattr(gs.results, "llm_errors", None)
     if llm_decisions and isinstance(llm_decisions, dict):
         pruning = {}
-        for key, label in [("direct_record", "confirmed"),
-                           ("forbid_record", "rejected")]:
+        for key, label in [("direct_record", "confirmed"), ("forbid_record", "rejected")]:
             record = llm_decisions.get(key)
             if record:
                 named = []
@@ -271,9 +272,7 @@ def generate_discovery_summary(result):
     if graph_kind == "dag":
         key_findings.append("Fully oriented DAG — all causal directions determined")
     elif graph_kind == "cpdag":
-        key_findings.append(
-            f"CPDAG — {n_directed} edges oriented, {n_undirected} ambiguous"
-        )
+        key_findings.append(f"CPDAG — {n_directed} edges oriented, {n_undirected} ambiguous")
     elif graph_kind == "pag":
         key_findings.append("PAG — possible latent confounders detected")
 
@@ -281,9 +280,7 @@ def generate_discovery_summary(result):
         sources = Counter(e["from"] for e in edges if e["type"] == "directed")
         if sources:
             top_name, top_count = sources.most_common(1)[0]
-            key_findings.append(
-                f"Most influential variable: {top_name} ({top_count} outgoing edges)"
-            )
+            key_findings.append(f"Most influential variable: {top_name} ({top_count} outgoing edges)")
 
     if n_edges == 0:
         key_findings.append("No edges discovered — variables appear independent")
@@ -291,25 +288,16 @@ def generate_discovery_summary(result):
     # Limitations
     limitations = []
     if graph_kind == "cpdag":
-        limitations.append(
-            "Some edge directions ambiguous — consider LiNGAM for unique DAG "
-            "if data is non-Gaussian"
-        )
+        limitations.append("Some edge directions ambiguous — consider LiNGAM for unique DAG if data is non-Gaussian")
     elif graph_kind == "pag":
-        limitations.append(
-            "Latent confounders possible — causal effect estimation unreliable"
-        )
+        limitations.append("Latent confounders possible — causal effect estimation unreliable")
 
     if diagnosis:
         sample_size = diagnosis.get("sample_size")
         if sample_size and sample_size < 100:
-            limitations.append(
-                f"Small sample ({sample_size} rows) — results may be unstable"
-            )
+            limitations.append(f"Small sample ({sample_size} rows) — results may be unstable")
 
-    limitations.append(
-        "Observational data cannot prove causation — validate with domain knowledge"
-    )
+    limitations.append("Observational data cannot prove causation — validate with domain knowledge")
 
     # Algorithm rationale
     if planner == "llm":

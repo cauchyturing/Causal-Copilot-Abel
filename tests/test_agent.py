@@ -1,6 +1,5 @@
 """Tests for the agent pipeline."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -9,7 +8,7 @@ import pytest
 
 # Check if openai is available (needed for AgentLLM tests)
 try:
-    import openai as _openai
+    import openai as _openai  # noqa: F401
 
     _HAS_OPENAI = True
 except ImportError:
@@ -70,6 +69,7 @@ class TestAgentContextFiles:
 # ---------------------------------------------------------------------------
 
 
+@needs_openai
 class TestAgentLLM:
     def test_import(self):
         from causal_copilot.agent.llm import AgentLLM
@@ -83,7 +83,7 @@ class TestAgentLLM:
         assert "openrouter" in PROVIDERS
         assert "ollama" in PROVIDERS
         assert "lmstudio" in PROVIDERS
-        for name, preset in PROVIDERS.items():
+        for _name, preset in PROVIDERS.items():
             assert "base_url" in preset
             assert "default_model" in preset
 
@@ -149,7 +149,6 @@ class TestAlgorithmSelector:
         assert "hyperparameters" in catalog["PC"]
 
     def test_select_algorithm_returns_registered(self):
-        from causal_copilot.agent.llm import AgentLLM
         from causal_copilot.agent.selector import select_algorithm
         from causal_copilot.algorithms.registry import REGISTRY
 
@@ -171,7 +170,6 @@ class TestAlgorithmSelector:
 
     def test_select_algorithm_fallback_on_bad_response(self):
         """LLM returning non-REGISTRY algo triggers rule-based fallback."""
-        from causal_copilot.agent.llm import AgentLLM
         from causal_copilot.agent.selector import select_algorithm
         from causal_copilot.algorithms.registry import REGISTRY
 
@@ -195,7 +193,6 @@ class TestAlgorithmSelector:
 
     def test_select_algorithm_fallback_on_exception(self):
         """LLM exception triggers rule-based fallback."""
-        from causal_copilot.agent.llm import AgentLLM
         from causal_copilot.agent.selector import select_algorithm
         from causal_copilot.algorithms.registry import REGISTRY
 
@@ -232,7 +229,6 @@ class TestHyperparameterTuner:
         assert callable(tune_hyperparameters)
 
     def test_tune_returns_dict(self):
-        from causal_copilot.agent.llm import AgentLLM
         from causal_copilot.agent.selector import tune_hyperparameters
 
         mock_llm = MagicMock()
@@ -249,7 +245,6 @@ class TestHyperparameterTuner:
         assert isinstance(hp, dict)
 
     def test_tune_returns_empty_on_exception(self):
-        from causal_copilot.agent.llm import AgentLLM
         from causal_copilot.agent.selector import tune_hyperparameters
 
         def raising_complete(prompt, system="", json_mode=False):
@@ -291,9 +286,7 @@ class TestAgentCopilot:
         y = 0.8 * x + rng.normal(size=n) * 0.3
         df = pd.DataFrame({"X": x, "Y": y})
 
-        mock_decision = AgentDecision(
-            algorithm="PC", hyperparams={}, reasoning="Mock", source="llm"
-        )
+        mock_decision = AgentDecision(algorithm="PC", hyperparams={}, reasoning="Mock", source="llm")
 
         with (
             patch(
@@ -305,7 +298,9 @@ class TestAgentCopilot:
                 return_value={},
             ),
             patch.object(
-                AgentCopilot, "_interpret_result", return_value=None,
+                AgentCopilot,
+                "_interpret_result",
+                return_value=None,
             ),
         ):
             agent = AgentCopilot.__new__(AgentCopilot)
@@ -344,7 +339,9 @@ class TestAgentCopilot:
                 return_value={},
             ),
             patch.object(
-                AgentCopilot, "_interpret_result", return_value=None,
+                AgentCopilot,
+                "_interpret_result",
+                return_value=None,
             ),
         ):
             agent = AgentCopilot.__new__(AgentCopilot)

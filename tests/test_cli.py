@@ -10,6 +10,15 @@ import pytest
 
 from causal_copilot.cli import main
 
+try:
+    import openai as _openai  # noqa: F401
+
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
+
+needs_openai = pytest.mark.skipif(not _HAS_OPENAI, reason="openai not installed")
+
 
 class TestVersion:
     def test_version_output(self, capsys):
@@ -135,8 +144,7 @@ class TestBenchmarkCLI:
     def test_benchmark_single(self, tmp_path):
         """Run benchmark on one algo + one scenario."""
         out_file = tmp_path / "result.json"
-        main(["benchmark", "--algorithm", "PC", "--scenario", "linear_chain",
-              "--output", str(out_file)])
+        main(["benchmark", "--algorithm", "PC", "--scenario", "linear_chain", "--output", str(out_file)])
         assert out_file.exists()
         data = json.loads(out_file.read_text())
         assert len(data) == 1
@@ -157,6 +165,7 @@ class TestDoctorLLM:
         assert "LLM" in out
 
 
+@needs_openai
 class TestAgentCLI:
     def test_agent_help(self, capsys):
         """Agent subcommand should exist."""
@@ -175,9 +184,7 @@ class TestAgentCLI:
         csv_path = tmp_path / "test.csv"
         df.to_csv(csv_path, index=False)
 
-        mock_decision = AgentDecision(
-            algorithm="PC", hyperparams={}, reasoning="Mock", source="llm"
-        )
+        mock_decision = AgentDecision(algorithm="PC", hyperparams={}, reasoning="Mock", source="llm")
         with (
             _mock_algorithm(),
             patch(

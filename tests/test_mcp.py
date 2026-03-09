@@ -105,10 +105,12 @@ class TestInspectGraphTool:
         from causal_copilot.mcp.server import inspect_graph
 
         # A->B: adj[1,0]=1
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+            )
+        )
         assert result["status"] == "ok"
         assert result["graph_kind"] == "dag"
         assert result["inference_policy"]["eligibility"] is True
@@ -119,10 +121,12 @@ class TestInspectGraphTool:
     def test_cpdag_needs_more_input(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,2],[2,0]]",
-            node_names='["A","B"]',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,2],[2,0]]",
+                node_names='["A","B"]',
+            )
+        )
         assert result["status"] == "needs_more_input"
         assert "data_diagnosis" in result["missing_inputs"]
         assert "next_step" in result
@@ -130,11 +134,13 @@ class TestInspectGraphTool:
     def test_cpdag_with_diagnosis_allows_ida(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,2],[2,0]]",
-            node_names='["A","B"]',
-            data_diagnosis='{"linearity": true, "gaussian_error": true}',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,2],[2,0]]",
+                node_names='["A","B"]',
+                data_diagnosis='{"linearity": true, "gaussian_error": true}',
+            )
+        )
         assert result["status"] == "ok"
         assert result["inference_policy"]["eligibility"] is True
         assert result["inference_policy"]["method"] == "ida"
@@ -142,21 +148,25 @@ class TestInspectGraphTool:
     def test_cpdag_nonlinear_rejects(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,2],[2,0]]",
-            node_names='["A","B"]',
-            data_diagnosis='{"linearity": false, "gaussian_error": true}',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,2],[2,0]]",
+                node_names='["A","B"]',
+                data_diagnosis='{"linearity": false, "gaussian_error": true}',
+            )
+        )
         assert result["status"] == "ok"
         assert result["inference_policy"]["eligibility"] is False
 
     def test_pag_rejects(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,3],[3,0]]",
-            node_names='["A","B"]',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,3],[3,0]]",
+                node_names='["A","B"]',
+            )
+        )
         assert result["status"] == "ok"
         assert result["graph_kind"] == "pag"
         assert result["inference_policy"]["eligibility"] is False
@@ -165,12 +175,14 @@ class TestInspectGraphTool:
         from causal_copilot.mcp.server import inspect_graph
 
         # A->B->C: adj[1,0]=1, adj[2,1]=1
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0,0],[1,0,0],[0,1,0]]",
-            node_names='["A","B","C"]',
-            treatment="A",
-            outcome="C",
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,0,0],[1,0,0],[0,1,0]]",
+                node_names='["A","B","C"]',
+                treatment="A",
+                outcome="C",
+            )
+        )
         assert result["status"] == "ok"
         qa = result["query_assessment"]
         assert qa["directed_path_exists"] is True
@@ -181,12 +193,14 @@ class TestInspectGraphTool:
         from causal_copilot.mcp.server import inspect_graph
 
         # B->A: adj[0,1]=1. Query A->B has no directed path.
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,1],[0,0]]",
-            node_names='["A","B"]',
-            treatment="A",
-            outcome="B",
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,1],[0,0]]",
+                node_names='["A","B"]',
+                treatment="A",
+                outcome="B",
+            )
+        )
         assert result["status"] == "ok"
         qa = result["query_assessment"]
         assert qa["directed_path_exists"] is False
@@ -196,11 +210,13 @@ class TestInspectGraphTool:
         from causal_copilot.mcp.artifacts import get_store
         from causal_copilot.mcp.server import inspect_graph
 
-        rid = get_store().save({
-            "adjacency_matrix": [[0, 0], [1, 0]],
-            "node_names": ["X", "Y"],
-            "data_diagnosis": {"linearity": True, "gaussian_error": True},
-        })
+        rid = get_store().save(
+            {
+                "adjacency_matrix": [[0, 0], [1, 0]],
+                "node_names": ["X", "Y"],
+                "data_diagnosis": {"linearity": True, "gaussian_error": True},
+            }
+        )
         result = json.loads(inspect_graph(run_id=rid))
         assert result["status"] == "ok"
         assert result["graph_kind"] == "dag"
@@ -264,10 +280,12 @@ class TestInspectGraphTool:
     def test_graph_stats(self):
         from causal_copilot.mcp.server import inspect_graph
 
-        result = json.loads(inspect_graph(
-            adjacency_matrix="[[0,0],[1,0]]",
-            node_names='["A","B"]',
-        ))
+        result = json.loads(
+            inspect_graph(
+                adjacency_matrix="[[0,0],[1,0]]",
+                node_names='["A","B"]',
+            )
+        )
         gs = result["graph_stats"]
         assert gs["n_nodes"] == 2
         assert gs["n_edges"] == 1
@@ -328,11 +346,13 @@ class TestRunAlgorithmTool:
             lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
         csv = "\n".join(lines)
         with _mock_run_algorithm():
-            result = json.loads(run_algorithm(
-                csv,
-                algorithm="PC",
-                hyperparameters='{"alpha": 0.01}',
-            ))
+            result = json.loads(
+                run_algorithm(
+                    csv,
+                    algorithm="PC",
+                    hyperparameters='{"alpha": 0.01}',
+                )
+            )
         assert result["status"] == "ok"
         prov = result["provenance"]
         assert "requested_hyperparameters" in prov
@@ -349,12 +369,14 @@ class TestRunAlgorithmTool:
             lines.append(f"{rng.normal()},{rng.normal()},{rng.normal()}")
         csv = "\n".join(lines)
         with _mock_run_algorithm():
-            result = json.loads(run_algorithm(
-                csv,
-                algorithm="PC",
-                hyperparameters='{"alpha": 0.01, "indep_test": "kci"}',
-                allow_resolver_overrides=False,
-            ))
+            result = json.loads(
+                run_algorithm(
+                    csv,
+                    algorithm="PC",
+                    hyperparameters='{"alpha": 0.01, "indep_test": "kci"}',
+                    allow_resolver_overrides=False,
+                )
+            )
         assert result["status"] == "ok"
         prov = result["provenance"]
         # With overrides disabled, effective should match requested
@@ -378,6 +400,7 @@ class TestRunAlgorithmTool:
         assert "_processed_data" in cached
         assert "_statistics" in cached
         import pandas as pd
+
         assert isinstance(cached["_processed_data"], pd.DataFrame)
 
     def test_missing_algorithm(self):
@@ -427,7 +450,7 @@ class TestDiscoverTool:
     def test_with_algorithm_override(self):
         from causal_copilot.mcp.server import discover
 
-        csv = "x,y\n" + "\n".join(f"{i},{i*2}" for i in range(50))
+        csv = "x,y\n" + "\n".join(f"{i},{i * 2}" for i in range(50))
         with _mock_run_algorithm():
             result = json.loads(discover(csv, algorithm="PC"))
         assert result["status"] in ("ok", "partial", "error")
@@ -483,9 +506,13 @@ class TestEstimationDML:
         y = 2.0 * x + z + rng.normal(size=n) * 0.5
         data = pd.DataFrame({"Z": z, "X": x, "Y": y})
         result = estimate_dml(
-            data, treatment="X", outcome="Y",
-            X_col=["Z"], W_col=["Z"],
-            T0=0.0, T1=1.0,
+            data,
+            treatment="X",
+            outcome="Y",
+            X_col=["Z"],
+            W_col=["Z"],
+            T0=0.0,
+            T1=1.0,
         )
         assert "ate" in result
         ate = result["ate"]["estimate"]
@@ -504,9 +531,13 @@ class TestEstimationDRL:
         y = 2.0 * t + z + rng.normal(size=n) * 0.5
         data = pd.DataFrame({"Z": z, "T": t, "Y": y})
         result = estimate_drl(
-            data, treatment="T", outcome="Y",
-            X_col=["Z"], W_col=["Z"],
-            T0=0, T1=1,
+            data,
+            treatment="T",
+            outcome="Y",
+            X_col=["Z"],
+            W_col=["Z"],
+            T0=0,
+            T1=1,
         )
         assert "ate" in result
         assert result["ate"]["estimate"] is not None
@@ -535,11 +566,16 @@ class TestEstimateEffectTool:
         # DAG: Z→X (adj[1,0]=1), Z→Y (adj[2,0]=1), X→Y (adj[2,1]=1)
         adj = "[[0,0,0],[1,0,0],[1,1,0]]"
         names = '["Z","X","Y"]'
-        result = json.loads(estimate_effect(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            method="linear",
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                method="linear",
+            )
+        )
         assert result["status"] == "ok"
         assert result["method"] == "linear"
         ate = result["estimates"]["ate"]["estimate"]
@@ -556,10 +592,15 @@ class TestEstimateEffectTool:
         # PAG: adj[0,1]=3, adj[1,0]=3
         adj = "[[0,3],[3,0]]"
         names = '["X","Y"]'
-        result = json.loads(estimate_effect(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+            )
+        )
         assert result["status"] == "rejected"
         assert "next_steps" in result
 
@@ -572,11 +613,16 @@ class TestEstimateEffectTool:
         adj = "[[0,2],[2,0]]"
         names = '["X","Y"]'
         diag = '{"linearity": false, "gaussian_error": true}'
-        result = json.loads(estimate_effect(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            data_diagnosis=diag,
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                data_diagnosis=diag,
+            )
+        )
         assert result["status"] == "rejected"
 
     def test_treatment_not_in_data(self):
@@ -584,7 +630,8 @@ class TestEstimateEffectTool:
 
         with pytest.raises(ToolError, match="MISSING"):
             estimate_effect(
-                treatment="MISSING", outcome="Y",
+                treatment="MISSING",
+                outcome="Y",
                 csv_data="X,Y\n1,2\n3,4",
                 adjacency_matrix="[[0,0],[1,0]]",
                 node_names='["X","Y"]',
@@ -595,8 +642,10 @@ class TestEstimateEffectTool:
 
         with pytest.raises(ToolError, match="mutually exclusive"):
             estimate_effect(
-                treatment="X", outcome="Y",
-                run_id="abc", csv_data="x,y\n1,2",
+                treatment="X",
+                outcome="Y",
+                run_id="abc",
+                csv_data="x,y\n1,2",
             )
 
     def test_no_input(self):
@@ -614,8 +663,11 @@ class TestEstimateEffectTool:
         names = '["Z","X","Y"]'
         with pytest.raises(ToolError, match="bogus"):
             estimate_effect(
-                treatment="X", outcome="Y",
-                csv_data=csv, adjacency_matrix=adj, node_names=names,
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
                 method="bogus",
             )
 
@@ -644,10 +696,14 @@ class TestEstimateEffectTool:
         cached["node_names"] = ["Z", "X", "Y"]
         cached["data_diagnosis"] = {"linearity": True, "gaussian_error": True}
 
-        result = json.loads(estimate_effect(
-            treatment="X", outcome="Y",
-            run_id=rid, method="linear",
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="X",
+                outcome="Y",
+                run_id=rid,
+                method="linear",
+            )
+        )
         assert result["status"] == "ok"
         assert 1.0 < result["estimates"]["ate"]["estimate"] < 3.0
 
@@ -666,8 +722,13 @@ class TestEstimationMetaLearner:
         y = 3.0 * t + z + rng.normal(size=n) * 0.5
         data = pd.DataFrame({"Z": z, "T": t, "Y": y})
         result = estimate_metalearner(
-            data, treatment="T", outcome="Y", X_col=["Z"],
-            T0=0, T1=1, learner="t",
+            data,
+            treatment="T",
+            outcome="Y",
+            X_col=["Z"],
+            T0=0,
+            T1=1,
+            learner="t",
         )
         assert "ate" in result
         ate = result["ate"]["estimate"]
@@ -689,8 +750,14 @@ class TestEstimationIV:
         y = 2.0 * t + 0.5 * u + rng.normal(size=n) * 0.3
         data = pd.DataFrame({"Z": z, "T": t, "Y": y, "W": rng.normal(size=n)})
         result = estimate_iv(
-            data, treatment="T", outcome="Y", instrument="Z",
-            X_col=["W"], W_col=["W"], T0=0.0, T1=1.0,
+            data,
+            treatment="T",
+            outcome="Y",
+            instrument="Z",
+            X_col=["W"],
+            W_col=["W"],
+            T0=0.0,
+            T1=1.0,
         )
         assert "ate" in result
         ate = result["ate"]["estimate"]
@@ -716,11 +783,16 @@ class TestEstimateEffectMetaLearner:
         # DAG: Z→T (adj[1,0]=1), Z→Y (adj[2,0]=1), T→Y (adj[2,1]=1)
         adj = "[[0,0,0],[1,0,0],[1,1,0]]"
         names = '["Z","T","Y"]'
-        result = json.loads(estimate_effect(
-            treatment="T", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            method="metalearner",
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="T",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                method="metalearner",
+            )
+        )
         assert result["status"] == "ok"
         assert result["method"] == "metalearner"
         assert result["estimates"]["ate"]["estimate"] is not None
@@ -742,11 +814,16 @@ class TestEstimateEffectIV:
         # DAG: Z→T (adj[1,0]=1), T→Y (adj[2,1]=1). Z is instrument.
         adj = "[[0,0,0],[1,0,0],[0,1,0]]"
         names = '["Z","T","Y"]'
-        result = json.loads(estimate_effect(
-            treatment="T", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            method="iv",
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="T",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                method="iv",
+            )
+        )
         assert result["status"] == "ok"
         assert result["method"] == "iv"
         assert "instrument" in result["method_detail"].lower()
@@ -754,15 +831,20 @@ class TestEstimateEffectIV:
     def test_iv_no_instrument_found(self):
         from causal_copilot.mcp.server import estimate_effect
 
-        csv = "X,Y\n" + "\n".join(f"{i},{i*2}" for i in range(100))
+        csv = "X,Y\n" + "\n".join(f"{i},{i * 2}" for i in range(100))
         # DAG: X→Y only, no instrument
         adj = "[[0,0],[1,0]]"
         names = '["X","Y"]'
-        result = json.loads(estimate_effect(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            method="iv",
-        ))
+        result = json.loads(
+            estimate_effect(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                method="iv",
+            )
+        )
         assert result["status"] == "error"
         assert "instrument" in result["error"].lower()
 
@@ -784,10 +866,15 @@ class TestRefuteEstimateTool:
         csv = "\n".join(lines)
         adj = "[[0,0],[1,0]]"
         names = '["X","Y"]'
-        result = json.loads(refute_estimate(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-        ))
+        result = json.loads(
+            refute_estimate(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+            )
+        )
         assert result["status"] == "ok"
         assert "original_estimate" in result
         assert "refutations" in result
@@ -800,10 +887,15 @@ class TestRefuteEstimateTool:
         csv = "X,Y\n1,2\n3,4\n5,6"
         adj = "[[0,3],[3,0]]"
         names = '["X","Y"]'
-        result = json.loads(refute_estimate(
-            treatment="X", outcome="Y",
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-        ))
+        result = json.loads(
+            refute_estimate(
+                treatment="X",
+                outcome="Y",
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+            )
+        )
         assert result["status"] == "rejected"
 
 
@@ -837,11 +929,16 @@ class TestEstimateCounterfactualTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(estimate_counterfactual(
-            treatment="A", outcome="C",
-            intervention_value=5.0,
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            estimate_counterfactual(
+                treatment="A",
+                outcome="C",
+                intervention_value=5.0,
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert "observed" in result
         assert "counterfactual" in result
@@ -856,10 +953,14 @@ class TestAttributeAnomalyTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(attribute_anomaly(
-            target_node="C",
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            attribute_anomaly(
+                target_node="C",
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert "attributions" in result
         assert "interpretation" in result
@@ -871,7 +972,9 @@ class TestAttributeAnomalyTool:
         with pytest.raises(ToolError, match="MISSING"):
             attribute_anomaly(
                 target_node="MISSING",
-                csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
             )
 
 
@@ -893,13 +996,15 @@ class TestAttributeDistributionChangeTool:
             lines.append(",".join(str(v) for v in row))
         csv_new = "\n".join(lines)
 
-        result = json.loads(attribute_distribution_change(
-            target_node="C",
-            csv_data_new=csv_new,
-            csv_data_old=csv_old,
-            adjacency_matrix=_GCM_ADJ,
-            node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            attribute_distribution_change(
+                target_node="C",
+                csv_data_new=csv_new,
+                csv_data_old=csv_old,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert "attributions" in result
         assert "interpretation" in result
@@ -911,13 +1016,18 @@ class TestSimulateInterventionTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(simulate_intervention(
-            treatment="A", outcome="C",
-            intervention_value=2.0,
-            shift=True,
-            num_samples=500,
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            simulate_intervention(
+                treatment="A",
+                outcome="C",
+                intervention_value=2.0,
+                shift=True,
+                num_samples=500,
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert "original_distribution" in result
         assert "intervention_distribution" in result
@@ -931,13 +1041,18 @@ class TestSimulateInterventionTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(simulate_intervention(
-            treatment="A", outcome="C",
-            intervention_value=0.0,
-            shift=False,
-            num_samples=500,
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            simulate_intervention(
+                treatment="A",
+                outcome="C",
+                intervention_value=0.0,
+                shift=False,
+                num_samples=500,
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert result["intervention_type"] == "atomic"
 
@@ -987,10 +1102,14 @@ class TestComputeFeatureImportanceTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(compute_feature_importance(
-            target_node="C",
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-        ))
+        result = json.loads(
+            compute_feature_importance(
+                target_node="C",
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+            )
+        )
         assert result["status"] == "ok"
         assert "feature_importance" in result
         assert "interpretation" in result
@@ -1003,7 +1122,9 @@ class TestComputeFeatureImportanceTool:
         with pytest.raises(ToolError, match="MISSING"):
             compute_feature_importance(
                 target_node="MISSING",
-                csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
             )
 
     def test_nonlinear_detection(self):
@@ -1012,11 +1133,15 @@ class TestComputeFeatureImportanceTool:
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
         diag = '{"linearity": false}'
-        result = json.loads(compute_feature_importance(
-            target_node="C",
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-            data_diagnosis=diag,
-        ))
+        result = json.loads(
+            compute_feature_importance(
+                target_node="C",
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+                data_diagnosis=diag,
+            )
+        )
         assert result["status"] == "ok"
         assert result["method"] == "tree_shap"
 
@@ -1044,10 +1169,14 @@ class TestValidateGraphTool:
 
         rng = np.random.default_rng(42)
         csv = _make_gcm_csv(rng)
-        result = json.loads(validate_graph(
-            csv_data=csv, adjacency_matrix=_GCM_ADJ, node_names=_GCM_NAMES,
-            n_permutations=5,
-        ))
+        result = json.loads(
+            validate_graph(
+                csv_data=csv,
+                adjacency_matrix=_GCM_ADJ,
+                node_names=_GCM_NAMES,
+                n_permutations=5,
+            )
+        )
         assert result["status"] == "ok"
         assert "falsification_result" in result
         assert "interpretation" in result
@@ -1061,10 +1190,14 @@ class TestValidateGraphTool:
         # CPDAG with undirected A--B, directed B→C, A→C
         adj = "[[0,2,0],[2,0,0],[1,1,0]]"
         names = '["A","B","C"]'
-        result = json.loads(validate_graph(
-            csv_data=csv, adjacency_matrix=adj, node_names=names,
-            n_permutations=5,
-        ))
+        result = json.loads(
+            validate_graph(
+                csv_data=csv,
+                adjacency_matrix=adj,
+                node_names=names,
+                n_permutations=5,
+            )
+        )
         assert result["status"] == "ok"
         assert result["graph_kind"] == "cpdag"
         assert "dropped_edges" in result
@@ -1076,17 +1209,24 @@ class TestValidateGraphTool:
 class TestToolRegistration:
     def test_12_tools_registered(self):
         import asyncio
+
         from causal_copilot.mcp.server import mcp
 
         tools = asyncio.run(mcp.list_tools())
         actual_names = {t.name for t in tools}
         expected_tools = {
-            "discover", "inspect_graph", "estimate_effect",
-            "diagnose_data", "run_algorithm",
-            "refute_estimate", "estimate_counterfactual",
-            "attribute_anomaly", "attribute_distribution_change",
+            "discover",
+            "inspect_graph",
+            "estimate_effect",
+            "diagnose_data",
+            "run_algorithm",
+            "refute_estimate",
+            "estimate_counterfactual",
+            "attribute_anomaly",
+            "attribute_distribution_change",
             "simulate_intervention",
-            "compute_feature_importance", "validate_graph",
+            "compute_feature_importance",
+            "validate_graph",
         }
         missing = expected_tools - actual_names
         assert not missing, f"Missing tools: {missing}"
@@ -1147,6 +1287,7 @@ class TestKnowledgePrompt:
 
         import sys
         from types import ModuleType
+
         fake = ModuleType("preprocess.stat_info_functions")
         fake.stat_info_collection = _mock_nongauss
         old = sys.modules.get("preprocess.stat_info_functions")
@@ -1178,9 +1319,13 @@ class TestDomainKnowledgeInjection:
         dk = "Income is caused by Education level. Wage depends on both."
 
         with _mock_run_algorithm():
-            result = json.loads(discover(
-                csv, query="What causes Wage?", domain_knowledge=dk,
-            ))
+            result = json.loads(
+                discover(
+                    csv,
+                    query="What causes Wage?",
+                    domain_knowledge=dk,
+                )
+            )
         # Should work without error — knowledge just passes through
         assert result["status"] in ("ok", "partial", "error")
 
@@ -1199,7 +1344,7 @@ class TestFilterKnowledgeBugFix:
     """Test that Filter now replaces [DOMAIN_KNOWLEDGE] in its prompt."""
 
     def test_domain_knowledge_in_filter_prompt(self):
-        from causal_copilot.mcp.bridge import make_global_state, make_args
+        from causal_copilot.mcp.bridge import make_args, make_global_state
 
         df = pd.DataFrame({"Income": range(100), "Education": range(100)})
         gs = make_global_state(df, query="What causes Income?")
@@ -1218,6 +1363,7 @@ class TestFilterKnowledgeBugFix:
         # Import Filter and test its prompt generation (mock LLMClient)
         with patch("causal_discovery.filter.LLMClient"):
             from causal_discovery.filter import Filter
+
             args = make_args(query="What causes Income?")
             f = Filter(args)
             prompt = f.create_prompt(gs)
@@ -1295,11 +1441,13 @@ class TestRevisedGraphPreference:
         df = pd.DataFrame({"A": [1, 2], "B": [3, 4], "C": [5, 6]})
         gs = make_global_state(df)
         # A->B (directed), A-C (undirected)
-        gs.results.converted_graph = np.array([
-            [0, 0, 2],
-            [1, 0, 0],
-            [2, 0, 0],
-        ])
+        gs.results.converted_graph = np.array(
+            [
+                [0, 0, 2],
+                [1, 0, 0],
+                [2, 0, 0],
+            ]
+        )
         gs.statistics.linearity = True
         gs.statistics.gaussian_error = True
 
@@ -1353,7 +1501,9 @@ class TestBackgroundKnowledge:
 
         warnings = []
         spec = _parse_background_knowledge(
-            '[["Age","Income"],["Gender","Height"]]', "", warnings,
+            '[["Age","Income"],["Gender","Height"]]',
+            "",
+            warnings,
         )
         assert spec is not None
         assert len(spec["forbidden_edges"]) == 2
@@ -1365,7 +1515,9 @@ class TestBackgroundKnowledge:
 
         warnings = []
         spec = _parse_background_knowledge(
-            "", '[["Education","Income"]]', warnings,
+            "",
+            '[["Education","Income"]]',
+            warnings,
         )
         assert spec is not None
         assert len(spec["required_edges"]) == 1
@@ -1376,7 +1528,9 @@ class TestBackgroundKnowledge:
 
         warnings = []
         spec = _parse_background_knowledge(
-            '[["A","B"]]', '[["C","D"]]', warnings,
+            '[["A","B"]]',
+            '[["C","D"]]',
+            warnings,
         )
         assert "forbidden_edges" in spec
         assert "required_edges" in spec
@@ -1406,11 +1560,13 @@ class TestBackgroundKnowledge:
         csv = "\n".join(lines)
 
         with _mock_run_algorithm():
-            result = json.loads(discover(
-                csv,
-                forbidden_edges='[["A","B"]]',
-                required_edges='[["B","C"]]',
-            ))
+            result = json.loads(
+                discover(
+                    csv,
+                    forbidden_edges='[["A","B"]]',
+                    required_edges='[["B","C"]]',
+                )
+            )
         # Should not crash — constraints passed through
         assert result["status"] in ("ok", "partial", "error")
 
@@ -1424,10 +1580,13 @@ class TestBackgroundKnowledge:
         csv = "\n".join(lines)
 
         with _mock_run_algorithm():
-            result = json.loads(run_algorithm(
-                csv, algorithm="PC",
-                forbidden_edges='[["A","B"]]',
-            ))
+            result = json.loads(
+                run_algorithm(
+                    csv,
+                    algorithm="PC",
+                    forbidden_edges='[["A","B"]]',
+                )
+            )
         assert result["status"] in ("ok", "error")
 
 
@@ -1548,8 +1707,7 @@ class TestSelectionTransparency:
             score_calc = optimum.get("score_calculation")
             if score_calc:
                 selection_reasoning["scores"] = {
-                    k: v.get("final_score") if isinstance(v, dict) else v
-                    for k, v in score_calc.items()
+                    k: v.get("final_score") if isinstance(v, dict) else v for k, v in score_calc.items()
                 }
         hp_json = getattr(gs.algorithm, "algorithm_arguments_json", None)
         if hp_json and isinstance(hp_json, dict):
@@ -1586,6 +1744,7 @@ class TestPromptRegistration:
 
     def test_causal_analysis_prompt_exists(self):
         import asyncio
+
         from causal_copilot.mcp.server import mcp
 
         async def check():

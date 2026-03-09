@@ -2,7 +2,7 @@ name: MCP CI
 
 on:
   push:
-    branches: [main, feat/mcp-*]
+    branches: [main, abel-release, "feat/mcp-*"]
     paths:
       - 'causal_copilot/mcp/**'
       - 'causal_discovery/**'

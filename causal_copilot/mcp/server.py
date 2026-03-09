@@ -522,8 +522,14 @@ def estimate_effect(
     # --- Data properties for intelligent method/model selection ---
     from causal_copilot.mcp.offline import (
         get_default_estimation_config as _offline_select_method_config,
+    )
+    from causal_copilot.mcp.offline import (
         identify_confounders as _offline_confounders,
+    )
+    from causal_copilot.mcp.offline import (
         prepare_treatment,
+    )
+    from causal_copilot.mcp.offline import (
         select_estimation_method as _offline_select_method,
     )
 

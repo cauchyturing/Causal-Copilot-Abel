@@ -37,23 +37,27 @@ from causal_discovery.pdag_policy import (
 mcp = FastMCP(
     "Causal-Copilot",
     instructions="""\
-Causal discovery expert — turns any dataset into a causal graph.
+Causal discovery & inference expert — turns any dataset into a causal graph and estimates causal effects.
 
-## Tools (4)
+## Tools (5)
 1. **discover** — autonomous pipeline. Handles everything: data diagnosis, algorithm
    selection, hyperparameter tuning, execution, postprocessing. Use for 90% of cases.
 2. **inspect_graph** — analyze a causal graph: classify (DAG/CPDAG/PAG), check if
    causal effects are identifiable, assess specific treatment→outcome queries.
-   Always use after discover to answer follow-up causal questions.
-3. **diagnose_data** — get data statistics (linearity, gaussianity, missingness).
+3. **estimate_effect** — estimate the causal effect of treatment on outcome (ATE/ATT
+   with confidence intervals). Requires a causal graph. Checks inference eligibility
+   first — rejects honestly if effects are not identifiable.
+4. **diagnose_data** — get data statistics (linearity, gaussianity, missingness).
    Expert mode only — discover does this automatically.
-4. **run_algorithm** — run a named algorithm with explicit hyperparameters.
+5. **run_algorithm** — run a named algorithm with explicit hyperparameters.
    Expert mode only — discover selects the best algorithm automatically.
 
 ## Workflow
-- Default: discover(csv) → inspect_graph(run_id, treatment, outcome)
-- Expert: diagnose_data(csv) → run_algorithm(csv, algo) → inspect_graph(run_id)
+- Full: discover(csv) → inspect_graph(run_id, T, Y) → estimate_effect(run_id, T, Y)
+- Quick: discover(csv) → estimate_effect(run_id, T, Y)
+- Expert: diagnose_data(csv) → run_algorithm(csv, algo) → estimate_effect(run_id, T, Y)
 - If inspect_graph returns status="needs_more_input", follow its next_step field.
+- If estimate_effect returns status="rejected", follow its next_steps field.
 
 ## Resources (reference material)
 - causal://algorithms — list of all algorithms with descriptions
@@ -66,6 +70,7 @@ Causal discovery expert — turns any dataset into a causal graph.
 ## Key Rules
 - CPDAG/PAG edges are NOT definitive directions — say so.
 - Always check inference_policy before claiming effects are identifiable.
+- estimate_effect checks this automatically — trust its "rejected" status.
 - discover already handles algorithm selection — don't manually select unless asked.
 """,
 )
@@ -724,7 +729,7 @@ def run_algorithm(
         }
         result["next_steps"] = [
             f"inspect_graph(run_id='{run_id}') to classify graph and check inference eligibility",
-            f"inspect_graph(run_id='{run_id}', treatment='X', outcome='Y') to assess specific causal query",
+            f"estimate_effect(run_id='{run_id}', treatment='X', outcome='Y') to estimate causal effects",
         ]
 
         return json.dumps(result, indent=2, cls=_NumpyEncoder)
@@ -894,6 +899,7 @@ def discover(
         result["next_steps"] = [
             f"inspect_graph(run_id='{run_id}') to classify graph and check inference eligibility",
             f"inspect_graph(run_id='{run_id}', treatment='X', outcome='Y') to assess a specific causal query",
+            f"estimate_effect(run_id='{run_id}', treatment='X', outcome='Y') to estimate causal effects",
         ]
 
         return json.dumps(result, indent=2, cls=_NumpyEncoder)
@@ -1135,6 +1141,13 @@ def inspect_graph(
 
     # Contextual next steps based on graph state
     next_steps = []
+    if inference_policy["eligibility"] and treatment and outcome:
+        if query_assessment and query_assessment["effect_identifiable"]:
+            next_steps.append(
+                f"estimate_effect(treatment='{treatment}', outcome='{outcome}'"
+                + (f", run_id='{run_id}'" if run_id else "")
+                + ") to estimate the causal effect"
+            )
     if graph_kind == "cpdag" and not inference_policy["eligibility"]:
         next_steps.append(
             "Try DirectLiNGAM via run_algorithm — LiNGAM gives unique DAG if errors are non-Gaussian"
@@ -1146,6 +1159,10 @@ def inspect_graph(
     if not treatment and not outcome and inference_policy["eligibility"]:
         next_steps.append(
             "Specify treatment and outcome to assess a specific causal query"
+        )
+    if inference_policy["eligibility"] and not treatment:
+        next_steps.append(
+            "Call estimate_effect(treatment='X', outcome='Y') to estimate causal effects"
         )
     if next_steps:
         result["next_steps"] = next_steps
